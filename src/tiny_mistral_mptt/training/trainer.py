@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from collections import defaultdict
 import json
 from pathlib import Path
 import random
@@ -14,10 +14,13 @@ from ..config import ExperimentConfig
 from ..data.manifest import file_sha256, verify_artifact
 from ..data.packed_dataset import PackedTokenDataset, StatefulBlockSampler
 from ..evaluation.nll import evaluate_nll
+from ..evaluation.pass_depth import evaluate_pass_depth
 from ..variants.base import ExperimentalVariant
-from .checkpoint import TrainState, load_checkpoint, save_checkpoint
+from ..variants.multipass import MultiPassVariant
+from .checkpoint import TrainState, load_checkpoint, load_model_weights, save_checkpoint
+from .pass_schedule import PassScheduler
 from .phases import configure_phase
-from .schedule import cosine_lr_multiplier
+from .schedule import lr_multiplier
 
 
 def _append_jsonl(path: Path, item: dict) -> None:
@@ -30,6 +33,10 @@ def _set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def _parameter_count(parameters) -> int:
+    return sum(parameter.numel() for parameter in parameters)
 
 
 class Trainer:
@@ -56,22 +63,32 @@ class Trainer:
         verify_artifact(config.data_dir)
         self.manifest_path = Path(config.data_dir) / "manifest.json"
         self.manifest_sha256 = file_sha256(self.manifest_path)
+
         _set_seed(config.seed)
         self.sampler = StatefulBlockSampler(len(train_data), seed=config.seed + 1)
+        self.pass_scheduler = PassScheduler(config.pass_schedule, seed=config.seed + 2)
 
-        # Vanilla has no Phase-A parameters, so the bootstrap starts directly
-        # in Phase B. The phase machinery is already present for future variants.
-        trainable = configure_phase(model, "B")
+        initialization_provenance = None
+        if config.init_from:
+            initialization_provenance = load_model_weights(config.init_from, model=self.model)
+
+        trainable = configure_phase(model, config.phase)
         if trainable == 0:
-            raise RuntimeError("Phase B has no trainable parameters")
-        self.optimizer = torch.optim.AdamW(
-            (parameter for parameter in model.parameters() if parameter.requires_grad),
-            lr=config.learning_rate,
-            weight_decay=config.weight_decay,
-            foreach=False,
-        )
-        self.state = TrainState(phase="B")
+            raise RuntimeError(f"Phase {config.phase} has no trainable parameters")
+        self.optimizer = self._build_optimizer()
+        self.state = TrainState(phase=config.phase)
 
+        added_ids = {id(parameter) for parameter in model.added_parameters()}
+        trainable_pretrained = [
+            parameter
+            for parameter in model.parameters()
+            if parameter.requires_grad and id(parameter) not in added_ids
+        ]
+        trainable_added = [
+            parameter
+            for parameter in model.parameters()
+            if parameter.requires_grad and id(parameter) in added_ids
+        ]
         run_info = {
             "config": config.to_dict(),
             "data_manifest_sha256": self.manifest_sha256,
@@ -79,10 +96,15 @@ class Trainer:
             "train_blocks": len(train_data),
             "validation_blocks": len(validation_data),
             "trainable_parameters": trainable,
+            "trainable_pretrained_parameters": _parameter_count(trainable_pretrained),
+            "trainable_added_parameters": _parameter_count(trainable_added),
+            "added_parameters_total": _parameter_count(model.added_parameters()),
+            "initialization_provenance": initialization_provenance,
         }
         (self.run_dir / "run.json").write_text(
             json.dumps(run_info, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
+
         if config.resume_from:
             self.state, sampler_state = load_checkpoint(
                 config.resume_from,
@@ -90,20 +112,83 @@ class Trainer:
                 optimizer=self.optimizer,
                 expected_manifest_sha256=self.manifest_sha256,
                 expected_experiment_config=config.to_dict(),
+                pass_scheduler=self.pass_scheduler,
             )
+            self._repair_optimizer_group_metadata()
+            if self.state.phase != config.phase:
+                raise ValueError(
+                    f"checkpoint phase {self.state.phase!r} does not match requested phase {config.phase!r}"
+                )
             self.sampler.load_state_dict(sampler_state)
 
-    def _set_lr(self) -> float:
-        multiplier = cosine_lr_multiplier(
+    def _build_optimizer(self) -> torch.optim.Optimizer:
+        added_ids = {id(parameter) for parameter in self.model.added_parameters()}
+        pretrained = [
+            parameter
+            for parameter in self.model.parameters()
+            if parameter.requires_grad and id(parameter) not in added_ids
+        ]
+        added = [
+            parameter
+            for parameter in self.model.parameters()
+            if parameter.requires_grad and id(parameter) in added_ids
+        ]
+        groups: list[dict] = []
+        if pretrained:
+            groups.append(
+                {
+                    "params": pretrained,
+                    "lr": self.config.pretrained_lr,
+                    "base_lr": self.config.pretrained_lr,
+                    "group_name": "pretrained",
+                    "weight_decay": self.config.weight_decay,
+                }
+            )
+        if added:
+            groups.append(
+                {
+                    "params": added,
+                    "lr": self.config.added_lr,
+                    "base_lr": self.config.added_lr,
+                    "group_name": "added",
+                    "weight_decay": self.config.weight_decay,
+                }
+            )
+        if not groups:
+            raise RuntimeError("no optimizer parameters")
+        return torch.optim.AdamW(groups, foreach=False)
+
+    def _repair_optimizer_group_metadata(self) -> None:
+        """Restore research-only optimizer metadata absent from v1 checkpoints."""
+        added_ids = {id(parameter) for parameter in self.model.added_parameters()}
+        for group in self.optimizer.param_groups:
+            flags = {id(parameter) in added_ids for parameter in group["params"]}
+            if len(flags) != 1:
+                raise RuntimeError("optimizer group mixes pretrained and added parameters")
+            is_added = next(iter(flags))
+            name = "added" if is_added else "pretrained"
+            group.setdefault("group_name", name)
+            group.setdefault("base_lr", self.config.added_lr if is_added else self.config.pretrained_lr)
+
+    def _set_lr(self) -> dict[str, float]:
+        multiplier = lr_multiplier(
             self.state.unique_tokens_seen,
             total_tokens=self.config.max_unique_tokens,
-            warmup_tokens=self.config.warmup_tokens,
-            min_lr_ratio=self.config.min_lr_ratio,
+            schedule=self.config.lr_schedule,
+            legacy_warmup_tokens=self.config.warmup_tokens,
+            legacy_min_lr_ratio=self.config.min_lr_ratio,
         )
-        lr = self.config.learning_rate * multiplier
+        result = {"lr_multiplier": float(multiplier)}
         for group in self.optimizer.param_groups:
-            group["lr"] = lr
-        return lr
+            base_lr = float(group["base_lr"])
+            group["lr"] = base_lr * multiplier
+            result[f"lr_{group['group_name']}"] = float(group["lr"])
+        # Backwards-compatible scalar for existing plotting scripts.
+        if "lr_pretrained" in result:
+            result["lr"] = result["lr_pretrained"]
+        elif "lr_added" in result:
+            result["lr"] = result["lr_added"]
+        return result
 
     def _checkpoint(self) -> Path:
         return save_checkpoint(
@@ -111,28 +196,55 @@ class Trainer:
             model=self.model,
             optimizer=self.optimizer,
             sampler_state=self.sampler.state_dict(),
+            pass_scheduler_state=self.pass_scheduler.state_dict(),
             train_state=self.state,
             experiment_config=self.config.to_dict(),
             data_manifest_sha256=self.manifest_sha256,
         )
 
     def _evaluate(self) -> dict:
-        result = evaluate_nll(
-            self.model,
-            self.validation_data,
-            device=self.device,
-            max_blocks=self.config.eval_batches or None,
-        )
-        record = {
-            "event": "validation",
-            "optimizer_steps": self.state.optimizer_steps,
-            "unique_tokens_seen": self.state.unique_tokens_seen,
-            "token_equivalent_compute": self.state.token_equivalent_compute,
-            "nll": result.nll,
-            "perplexity": result.perplexity,
-            "nll_by_source": result.nll_by_source,
-            "validation_blocks": result.blocks,
-        }
+        if self.config.eval_passes > 1:
+            if not isinstance(self.model, MultiPassVariant):
+                raise ValueError("eval_passes>1 requires a multipass variant")
+            result = evaluate_pass_depth(
+                self.model,
+                self.validation_data,
+                device=self.device,
+                passes=self.config.eval_passes,
+                max_blocks=self.config.eval_batches or None,
+            )
+            record = {
+                "event": "validation",
+                "optimizer_steps": self.state.optimizer_steps,
+                "unique_tokens_seen": self.state.unique_tokens_seen,
+                "token_equivalent_compute": self.state.token_equivalent_compute,
+                "nll": result.final_nll,
+                "perplexity": result.final_perplexity,
+                "nll_by_pass": list(result.nll_by_pass),
+                "perplexity_by_pass": list(result.perplexity_by_pass),
+                "hidden_delta_rms": list(result.hidden_delta_rms),
+                "nll_by_source_by_pass": list(result.nll_by_source_by_pass),
+                "validation_blocks": result.blocks,
+                "eval_passes": result.passes,
+            }
+        else:
+            result = evaluate_nll(
+                self.model,
+                self.validation_data,
+                device=self.device,
+                max_blocks=self.config.eval_batches or None,
+            )
+            record = {
+                "event": "validation",
+                "optimizer_steps": self.state.optimizer_steps,
+                "unique_tokens_seen": self.state.unique_tokens_seen,
+                "token_equivalent_compute": self.state.token_equivalent_compute,
+                "nll": result.nll,
+                "perplexity": result.perplexity,
+                "nll_by_source": result.nll_by_source,
+                "validation_blocks": result.blocks,
+                "eval_passes": 1,
+            }
         _append_jsonl(self.metrics_path, record)
         return record
 
@@ -160,6 +272,7 @@ class Trainer:
             self.optimizer.zero_grad(set_to_none=True)
             update_loss = 0.0
             update_passes = 0
+            update_metrics: dict[str, float] = defaultdict(float)
             remaining_micro = (target_tokens - self.state.unique_tokens_seen) // tokens_per_micro
             accumulation_steps = min(cfg.grad_accum_steps, remaining_micro)
             if accumulation_steps <= 0:
@@ -167,35 +280,47 @@ class Trainer:
             for _ in range(accumulation_steps):
                 indices = self.sampler.next_indices(cfg.batch_size)
                 ids = self.train_data.batch(indices, device=self.device)
-                output = self.model.compute_loss(ids, phase="B", passes=1)
+                passes = self.pass_scheduler.sample(self.state.unique_tokens_seen)
+                output = self.model.compute_loss(
+                    ids,
+                    phase=cfg.phase,
+                    passes=passes,
+                    loss_weights=cfg.pass_loss_weights,
+                )
                 if not bool(torch.isfinite(output.loss).item()):
                     raise RuntimeError("non-finite training loss")
                 (output.loss / accumulation_steps).backward()
                 update_loss += float(output.loss.detach().cpu())
                 update_passes += output.effective_passes
+                for key, value in output.metrics.items():
+                    update_metrics[key] += float(value)
                 self.state.micro_steps += 1
                 self.state.unique_tokens_seen += int(ids.numel())
                 self.state.token_equivalent_compute += int(ids.numel()) * output.effective_passes
             grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), cfg.grad_clip)
             if not bool(torch.isfinite(grad_norm).item()):
                 raise RuntimeError("non-finite gradient norm")
-            lr = self._set_lr()
+            lr_record = self._set_lr()
             self.optimizer.step()
             synchronize(self.device)
             self.state.optimizer_steps += 1
             elapsed = max(time.perf_counter() - start, 1e-9)
             record = {
                 "event": "train",
+                "phase": cfg.phase,
                 "optimizer_steps": self.state.optimizer_steps,
                 "micro_steps": self.state.micro_steps,
                 "unique_tokens_seen": self.state.unique_tokens_seen,
                 "token_equivalent_compute": self.state.token_equivalent_compute,
                 "loss": update_loss / accumulation_steps,
                 "grad_norm": float(grad_norm.detach().cpu()),
-                "lr": lr,
                 "tokens_per_second": (tokens_per_micro * accumulation_steps) / elapsed,
                 "mean_passes": update_passes / accumulation_steps,
+                **lr_record,
             }
+            record.update(
+                {key: value / accumulation_steps for key, value in sorted(update_metrics.items())}
+            )
             _append_jsonl(self.metrics_path, record)
 
             if next_eval is not None and self.state.unique_tokens_seen >= next_eval:

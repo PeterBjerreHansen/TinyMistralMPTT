@@ -7,15 +7,34 @@ import torch
 from tiny_mistral.loading import load_model
 from tiny_mistral.modeling import MistralForCausalLM
 
-from .variants import ExperimentalVariant, VanillaVariant
+from .variants import ExperimentalVariant, FBTVariant, MemoryTape32Variant, VanillaVariant
 
 
-def build_variant(name: str, backbone: MistralForCausalLM) -> ExperimentalVariant:
+def build_variant(
+    name: str,
+    backbone: MistralForCausalLM,
+    *,
+    architecture_seed: int = 4242,
+    memory_window: int = 32,
+) -> ExperimentalVariant:
     if name == "vanilla":
-        return VanillaVariant(backbone)
-    raise ValueError(
-        f"unknown variant {name!r}; this bootstrap intentionally exposes only 'vanilla'"
-    )
+        variant: ExperimentalVariant = VanillaVariant(backbone)
+    elif name == "fbt":
+        variant = FBTVariant(backbone, initialization_seed=architecture_seed)
+    elif name == "memory_tape32":
+        variant = MemoryTape32Variant(
+            backbone,
+            memory_window=memory_window,
+            initialization_seed=architecture_seed,
+        )
+    else:
+        raise ValueError(f"unknown variant {name!r}")
+
+    # The checkpoint loader has already placed/cast the backbone. Newly created
+    # research modules are ordinary CPU FP32 modules, so align them once here.
+    reference_parameter = next(backbone.parameters())
+    variant.to(device=reference_parameter.device, dtype=reference_parameter.dtype)
+    return variant
 
 
 def load_variant(
@@ -26,6 +45,8 @@ def load_variant(
     dtype: str | torch.dtype | None = None,
     attention_backend: str = "auto",
     compile_flex: bool = True,
+    architecture_seed: int = 4242,
+    memory_window: int = 32,
 ) -> ExperimentalVariant:
     backbone = load_model(
         model_dir,
@@ -34,4 +55,9 @@ def load_variant(
         attention_backend=attention_backend,
         compile_flex=compile_flex,
     )
-    return build_variant(name, backbone)
+    return build_variant(
+        name,
+        backbone,
+        architecture_seed=architecture_seed,
+        memory_window=memory_window,
+    )

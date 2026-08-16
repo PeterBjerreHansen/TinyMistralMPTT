@@ -1,54 +1,253 @@
-# Experimental protocol: bootstrap phase
+# Experimental protocol: FBT and MemoryTape32 phase
 
-This repository currently implements the architecture-independent vertical
-slice only. There is exactly one model variant: `vanilla`.
+## Scope
 
-## What is already fixed
+This phase compares three first-class models on the same pretrained TinyMistral
+backbone and deterministic Dolmino token stream:
 
-The trainer is token-budget based, uses fixed local token blocks, logs unique
-training tokens and token-equivalent backbone compute separately, supports
-stateful checkpoint/resume, performs held-out NLL evaluation, and exposes an
-optional lm-evaluation-harness adapter.
+1. `vanilla`
+2. `fbt`
+3. `memory_tape32`
 
-For vanilla, `effective_passes=1`, so unique tokens and token-equivalent compute
-are identical. This counter is already present so future pass schedules do not
-change the experiment log schema.
+No chunked-memory or hybrid design is part of this phase. The purpose is to
+establish clean finite-pass training behavior before adding further model
+families.
 
-## Phase A / Phase B contract
+## Architecture invariants
 
-The infrastructure knows about two phases but does not invent a fake wiring
-phase for vanilla:
+### Vanilla
 
-- **Phase A**: train architecture-added parameters while the TinyMistral
-  backbone is frozen. Vanilla has no added parameters, so its Phase A is an
-  explicit zero-step no-op.
-- **Phase B**: unfreeze/train the full model with the controlled continued-
-  pretraining protocol.
+One ordinary TinyMistral pass. It has no architecture-added parameters and no
+Phase A.
 
-The exact FBT Phase-A token budget, learning rate, and pass-loss recipe are
-intentionally **not** fixed yet. They should be chosen only after the first FBT
-implementation reveals how disruptive its inserted pathway is.
+### FBT
 
-## Resume contract
+Pass one is vanilla. For pass `k>1`, top-layer states from pass `k-1` are shifted
+one token to the right. At `t>0` the next input is the asymmetric GLU
 
-A training checkpoint contains model and optimizer state, the exact shuffled
-block sampler permutation/RNG/position, Python and PyTorch RNG states, token
-counters, phase, resolved experiment config, and the SHA-256 of the data
-manifest. Resume is rejected if the data manifest has changed.
+```text
+W_U h^(k-1)_(t-1) * sigmoid(W_G e_t)
+```
 
-## Primary and secondary evaluation
+and position zero retains `e_0`. The added modules are two bias-free
+`hidden_size x hidden_size` projections.
 
-Primary metric: held-out next-token NLL/perplexity on the fixed local Dolmino
-validation artifact, including a by-source NLL breakdown.
+### MemoryTape32
 
-Secondary metric: a checked-in lm-evaluation-harness suite. `quick.yaml` is a
-small development battery. `full.yaml` contains the ten 5-shot base-model tasks
-used in the Full-bandwidth Transformer evaluation set. Benchmark results are
-secondary because a 248M model can be close to chance on several tasks.
+Pass one is vanilla. For pass `k>1`, each decoder layer has a separate residual
+GQA cross-attention reader over the previous pass's final top-layer states. A
+query at token `t` may read only
 
-## Boundary for the next phase
+```text
+max(0, t-32) ... t-1
+```
 
-Do not add sparse memory or a general multipass abstraction yet. The next model
-work should implement FBT alone through the existing trainer/data/evaluation
-interfaces. Once FBT can train, resume, evaluate, and generate, its actual needs
-should determine the minimal common multipass API.
+with no same-position previous-pass state. The default reader geometry mirrors
+TinyMistral: 32 query heads, 8 KV heads, head dimension 32, no projection
+biases. The reader is implemented with O(T*W) local score work and does not
+construct a T x T memory score matrix.
+
+The model name denotes the reference/default `W=32`; `memory_window` remains a
+configurable experimental parameter.
+
+## Pass 1 parity gate
+
+For both multipass architectures:
+
+```text
+variant.compute_passes(ids, passes=1).pass[0]
+```
+
+must be numerically identical to direct vanilla TinyMistral. Research modules
+are skipped, not merely multiplied by a zero gate.
+
+`src/tiny_mistral/` is not modified to implement either architecture.
+
+## Flexible pass objective
+
+The trainer does not hard-code the FBT paper's objective. Given pass losses
+`L_1 ... L_K`, configured non-negative weights are right-aligned to the sampled
+pass count and normalized to sum to one:
+
+```text
+L = sum_k w_k L_k
+```
+
+Examples:
+
+```yaml
+pass_loss_weights: [0.5, 0.5]
+pass_loss_weights: [0.1, 0.9]
+pass_loss_weights: [0.05, 0.20, 0.75]
+pass_loss_weights: [0.0, 1.0]
+```
+
+The last form is useful for a wiring-only Phase A. `null` means uniform weights.
+The objective is common to FBT and MemoryTape32 so architecture comparisons do
+not silently change supervision.
+
+## Pass-count schedule
+
+Pass-count sampling and loss weighting are independent. `pass_schedule` is a
+stateful token-indexed list of stages. Each stage supplies a probability mass
+over positive pass counts; the final stage is unbounded.
+
+```yaml
+pass_schedule:
+  - until_tokens: 2000000
+    probabilities:
+      2: 1.0
+  - probabilities:
+      1: 0.50
+      2: 0.45
+      3: 0.05
+```
+
+The scheduler has an independent RNG, sample counter, and pass histogram. Its
+state is checkpointed so interrupted/resumed training reproduces the same
+future pass-count draws.
+
+The initial Mac wiring configs deliberately use fixed `K=2`. Mixed schedules
+are an experimental knob, not a requirement.
+
+## Phase A: wiring
+
+Phase A exists only for multipass variants.
+
+- all pretrained TinyMistral parameters are frozen;
+- only `added_parameters()` are trainable;
+- every configured pass count must be at least 2;
+- pass 1 is computed without retaining an autograd graph because it contains no
+  trainable Phase-A parameters;
+- later passes remain differentiable through the added recurrent pathway.
+
+The checked-in starting configs use fixed two-pass batches and final-pass-only
+supervision. This is a conservative wiring recipe, not a scientific claim that
+it is optimal.
+
+## Phase B: adaptation
+
+Phase B makes all model parameters differentiable, but the optimizer uses two
+parameter groups:
+
+```text
+pretrained parameters
+architecture-added parameters
+```
+
+Their base LRs are independently configurable:
+
+```yaml
+pretrained_learning_rate: 1.0e-7
+added_learning_rate: 1.0e-6
+```
+
+A zero or very small pretrained LR is therefore possible without changing the
+phase semantics. The checked-in Mac configs use a 10x lower pretrained LR as a
+starting point.
+
+## LR schedules
+
+The LR schedule supplies a common multiplicative factor to each parameter
+group's base LR. Supported schedules are:
+
+- `constant`
+- `cosine`
+- `piecewise_linear`
+
+If `lr_schedule` is omitted, the original bootstrap cosine fields
+`warmup_tokens` and `min_lr_ratio` retain their previous behavior.
+
+## `init_from` and `resume_from`
+
+These concepts are deliberately distinct.
+
+### `resume_from`
+
+Exact continuation of one trajectory. It restores:
+
+- model state;
+- optimizer state and parameter groups;
+- shuffled data sampler position/permutation/RNG;
+- pass-scheduler RNG, sample count, and histogram;
+- Python/PyTorch/CUDA RNG state when applicable;
+- optimizer/micro-step counters;
+- unique-token and token-equivalent compute counters;
+- phase and resolved experiment config.
+
+### `init_from`
+
+Loads only model parameters from another experiment checkpoint. Optimizer,
+sampler, schedules, RNG streams, and token counters start fresh. This is the
+intended Phase-A -> Phase-B boundary.
+
+Phase-A compute should therefore be reported separately rather than silently
+rolled into the Phase-B token budget.
+
+## Token accounting
+
+For each microbatch with `N` observed token IDs and `K` backbone passes:
+
+```text
+unique_tokens_seen += N
+token_equivalent_compute += N * K
+```
+
+These are deliberately distinct. A mixed-pass schedule changes compute without
+changing the number of unique training tokens.
+
+## Evaluation
+
+### One-pass held-out NLL
+
+`scripts/eval_nll.py` retains the original one-pass model interface and is the
+control metric.
+
+### Pass-depth NLL
+
+`scripts/eval_pass_depth.py` explicitly iterates a multipass model to a chosen
+pass depth on the fixed validation artifact. It records:
+
+- NLL and perplexity for every pass;
+- per-source NLL for every pass;
+- RMS difference between successive final top-layer hidden states.
+
+This is the principal wiring/stability diagnostic.
+
+### External benchmark harness
+
+The existing lm-evaluation-harness adapter currently exercises ordinary
+one-pass forward/generation semantics. It remains useful for the vanilla
+control but is not yet the primary multipass metric.
+
+## Generation boundary
+
+Finite-pass training/evaluation is implemented first. Online recurrent
+generation for FBT and MemoryTape32 is intentionally not included yet. Until
+that gate is implemented, multipass wrappers delegate public `generate()` to
+vanilla TinyMistral and must not be presented as recurrent decoders.
+
+## Initial Mac gate
+
+The first useful run is intentionally modest:
+
+```text
+FBT Phase A             fixed K=2
+FBT Phase B             fixed K=2
+MemoryTape32 Phase A    fixed K=2
+MemoryTape32 Phase B    fixed K=2
+```
+
+For each multipass model inspect:
+
+- pass-1 NLL;
+- pass-2 NLL before/after wiring;
+- gradient norms and finiteness;
+- pass-depth NLL through at least 4-8 passes;
+- hidden-state delta RMS;
+- added parameter count;
+- tokens/sec and token-equivalent compute.
+
+Only after both architectures clear this gate should pass-weight curricula,
+mixed pass schedules, larger datasets, multiple seeds, or recurrent decoding be
+expensive priorities.

@@ -1,48 +1,50 @@
-# TinyMistralMPTT — vanilla experimental substrate
+# TinyMistralMPTT
 
-This bootstrap is a **self-contained continued-pretraining/evaluation repo for
-vanilla TinyMistral**. It deliberately stops before FBT, sparse MemoryTape, or
-hybrid model code is introduced.
+A self-contained research repository for retrofitting multi-pass latent-state
+mechanisms onto the validated `M4-ai/TinyMistral-248M-v3` backbone.
 
-The purpose is to finish the architecture-independent experiment machinery
-first: exact vanilla provenance, deterministic Dolmino materialization, a
-reproducible token-budget trainer with checkpoint/resume, held-out NLL, and an
-`lm-evaluation-harness` adapter. The next development phase can then wire FBT
-into a system that already works end to end.
+The repository deliberately keeps `src/tiny_mistral/` as the vanilla reference
+implementation and places all research behavior under `src/tiny_mistral_mptt/`.
+The first comparison supports three first-class variants:
 
-## Current boundary
+- `vanilla`: exact one-pass TinyMistral control;
+- `fbt`: asymmetric-GLU latent feedback from the previous pass's immediately
+  preceding top-layer state;
+- `memory_tape32`: per-layer GQA cross-attention to the previous pass's most
+  recent 32 strictly earlier top-layer states.
 
-Implemented:
+No chunked-memory or hybrid model is implemented in this phase.
 
-- vendored TinyMistral vanilla implementation and baseline tests;
-- pinned `M4-ai/TinyMistral-248M-v3` checkpoint helpers;
-- deterministic `allenai/dolmino-mix-1124` 50B-recipe materialization;
-- fixed `uint16` unpadded training/validation blocks and manifests;
-- token-budget continued pretraining on CPU/MPS/CUDA;
-- exact block-sampler checkpoint/resume state;
-- unique-token and token-equivalent compute accounting;
-- held-out NLL/perplexity with source breakdown;
-- optional `lm-eval==0.4.12` adapter and checked-in quick/full suites;
-- Phase-A/Phase-B trainability hooks, with Phase A intentionally a no-op for
-  vanilla.
+## Scientific invariants
 
-Not implemented: FBT, MemoryTape, sparse memory, hybrid recurrence, pass
-schedules, or architecture-specific Phase-A wiring.
+For both multipass variants, **pass 1 is the vanilla model**. Newly initialized
+research modules are skipped entirely on pass 1. A one-pass FBT or MemoryTape32
+forward must therefore reproduce vanilla TinyMistral exactly.
 
-## 1. Install
+Training is intentionally configurable rather than tied to one paper-specific
+recipe:
 
-Install `uv`, then from the repository root:
+- pass counts are sampled from a token-indexed configurable schedule;
+- pass losses use configurable, right-aligned non-negative weights;
+- Phase A freezes the pretrained backbone and trains only added modules;
+- Phase B has independent base learning rates for pretrained and added
+  parameters, so the backbone may adapt slowly rather than being all-or-nothing
+  frozen;
+- LR multipliers may be constant, cosine, or piecewise-linear;
+- `init_from` loads model weights only for a fresh experimental stage;
+- `resume_from` restores the exact optimizer/data/RNG/pass-scheduler trajectory.
+
+See `docs/EXPERIMENT.md` for the full protocol.
+
+## 1. Install and test
 
 ```bash
 uv sync --extra data --extra eval
 uv run pytest -q
 ```
 
-`.python-version` pins Python 3.13 for this project. `uv` will provision it when
-needed. A lockfile is intentionally not fabricated in this archive because the
-build host cannot resolve the uncached online extras. The first successful
-internet-connected `uv sync` will resolve/create `uv.lock`; commit that file
-before serious experiments.
+Python 3.13 is selected by `.python-version`. `uv.lock` is committed by the
+online development environment.
 
 ## 2. Download and verify TinyMistral
 
@@ -51,7 +53,7 @@ uv run python scripts/download_checkpoint.py
 uv run python scripts/verify_checkpoint.py
 ```
 
-For the strongest vanilla oracle checks:
+Strong vanilla oracle checks remain available:
 
 ```bash
 uv run python scripts/compare_hf.py --device cpu --dtype float32
@@ -60,10 +62,7 @@ uv run python scripts/compare_hf_inputs_embeds.py --length 40
 uv run python scripts/mps_smoke.py
 ```
 
-## 3. Materialize a small Dolmino development artifact
-
-The checked-in development config requests 1,048,576 train tokens and
-131,072 validation tokens at sequence length 512:
+## 3. Materialize the Dolmino development artifact
 
 ```bash
 uv run python scripts/prepare_data.py \
@@ -71,53 +70,145 @@ uv run python scripts/prepare_data.py \
 uv run python scripts/verify_data.py data/dolmino/dev_512
 ```
 
-The data itself is not checked into git. Preparation streams each Dolmino source
-only long enough to satisfy its published-mixture quota, writes the fixed local
-binary artifact, and records hashes/revisions in `manifest.json`.
+The checked-in development config produces 1,048,576 training tokens and
+131,072 held-out tokens at sequence length 512 from the pinned published
+Dolmino 50B Stage-2 mixture. Data files are local artifacts and are not checked
+into git.
 
-See `docs/DATA.md` before changing the recipe.
-
-## 4. Vanilla continued-pretraining on a Mac
+## 4. Vanilla control
 
 ```bash
 uv run python scripts/train.py --config configs/mac/vanilla.yaml
-```
-
-The MPS config intentionally uses FP32 training, matching the numerical
-acceptance result from the vanilla reference repo. The local attention backend
-is selected automatically on MPS for unpadded fixed-length batches.
-
-Resume exactly from the most recent checkpoint:
-
-```bash
-uv run python scripts/train.py \
-  --config configs/mac/vanilla.yaml \
-  --resume-from runs/mac-vanilla/latest.pt
-```
-
-## 5. Evaluate held-out language-model loss
-
-Base checkpoint:
-
-```bash
-uv run python scripts/eval_nll.py \
-  --config configs/mac/vanilla.yaml \
-  --max-blocks 32
-```
-
-Continued-pretraining checkpoint:
-
-```bash
+uv run python scripts/eval_nll.py --config configs/mac/vanilla.yaml
 uv run python scripts/eval_nll.py \
   --config configs/mac/vanilla.yaml \
   --checkpoint runs/mac-vanilla/latest.pt
 ```
 
-This is the primary experiment metric.
+The vanilla model has no Phase A.
 
-## 6. Run the external benchmark battery
+## 5. FBT wiring and adaptation
 
-Development run:
+Phase A trains only the two added feedback projections with fixed two-pass
+training. The checked-in config is a **starting point, not a canonical
+objective**:
+
+```bash
+uv run python scripts/train.py --config configs/mac/fbt_phase_a.yaml
+```
+
+Phase B initializes from the Phase-A model weights, unfreezes the backbone, and
+uses separate pretrained/added learning rates:
+
+```bash
+uv run python scripts/train.py --config configs/mac/fbt_phase_b.yaml
+```
+
+Evaluate the recurrent pass map explicitly:
+
+```bash
+uv run python scripts/eval_pass_depth.py \
+  --config configs/mac/fbt_phase_b.yaml \
+  --checkpoint runs/mac-fbt-phase-b/latest.pt \
+  --passes 8
+```
+
+## 6. MemoryTape32 wiring and adaptation
+
+MemoryTape32 is an equal-status research variant, not scaffolding for another
+model. Each decoder layer reads the previous pass's top-layer memory tape via a
+strict-past local GQA reader with default window 32.
+
+```bash
+uv run python scripts/train.py \
+  --config configs/mac/memory_tape32_phase_a.yaml
+
+uv run python scripts/train.py \
+  --config configs/mac/memory_tape32_phase_b.yaml
+```
+
+Pass-depth evaluation:
+
+```bash
+uv run python scripts/eval_pass_depth.py \
+  --config configs/mac/memory_tape32_phase_b.yaml \
+  --checkpoint runs/mac-memory-tape32-phase-b/latest.pt \
+  --passes 8
+```
+
+## 7. Flexible objectives and schedules
+
+Pass supervision is independent of pass-count sampling. For example:
+
+```yaml
+pass_schedule:
+  - until_tokens: 2000000
+    probabilities:
+      2: 1.0
+  - probabilities:
+      1: 0.50
+      2: 0.45
+      3: 0.05
+
+pass_loss_weights: [0.05, 0.20, 0.75]
+```
+
+If a two-pass batch is sampled, the final two configured weights are used and
+renormalized. A one-pass batch always reduces to ordinary one-pass NTP.
+
+Phase-B parameter groups are independent:
+
+```yaml
+pretrained_learning_rate: 1.0e-7
+added_learning_rate: 1.0e-6
+lr_schedule:
+  type: cosine
+  warmup_tokens: 16384
+  min_multiplier: 0.1
+```
+
+A manual schedule is also supported:
+
+```yaml
+lr_schedule:
+  type: piecewise_linear
+  points:
+    - [0,        0.2]
+    - [100000,   1.0]
+    - [5000000,  1.0]
+    - [20000000, 0.1]
+```
+
+The multiplier is applied to both parameter groups while preserving their LR
+ratio.
+
+## 8. `init_from` versus `resume_from`
+
+`resume_from` means exact continuation. Model, optimizer, data sampler, Python
+and PyTorch RNG, pass-scheduler RNG/histogram, counters, and phase are restored.
+Trajectory-changing config edits are rejected.
+
+`init_from` loads only model parameters and starts a fresh run with new
+optimizer/scheduler/data counters. This is the intended Phase-A -> Phase-B
+transition.
+
+## 9. Evaluation boundary
+
+`eval_nll.py` and the existing `lm-evaluation-harness` adapter retain **one-pass
+vanilla semantics** by default. This is deliberate: ordinary model calls still
+mean the standard TinyMistral model.
+
+`eval_pass_depth.py` is the current multipass research evaluator. It reports
+NLL/perplexity at every requested pass, per-source NLL at every pass, and RMS
+changes in top-layer hidden states between successive passes.
+
+Online recurrent generation for FBT and MemoryTape32 is intentionally deferred
+until their finite-pass training behavior has been validated. The current
+`generate()` method on multipass wrappers delegates to vanilla generation.
+
+## 10. External benchmark battery
+
+The existing harness integration remains available for the one-pass control:
 
 ```bash
 uv run python scripts/eval_lm.py \
@@ -126,44 +217,23 @@ uv run python scripts/eval_lm.py \
   --limit 100
 ```
 
-Full predefined battery:
-
-```bash
-uv run python scripts/eval_lm.py \
-  --config configs/mac/vanilla.yaml \
-  --suite eval_configs/full.yaml
-```
-
-The adapter is deliberately single-process and batch-size-one for now. That is
-simple and auditable; GPU batching can be optimized later if benchmark runtime
-becomes material.
-
-## 7. GPU-scale prepared config
-
-`configs/data/dolmino_gpu_2048.yaml` describes an approximately 100M-token, 2M-validation-token,
-2048-context artifact. `configs/gpu/vanilla.yaml` is a starting CUDA config,
-not a claimed tuned optimum. Benchmark memory/throughput on the rented GPU
-before committing to the final context length or batch size.
+The benchmark battery is secondary to held-out Dolmino NLL during the wiring
+stage.
 
 ## Repository layout
 
 ```text
-src/tiny_mistral/                 vendored vanilla backbone
-src/tiny_mistral_mptt/data/       Dolmino recipe/materialization/mmap dataset
-src/tiny_mistral_mptt/training/   trainer, phases, schedules, checkpoint state
-src/tiny_mistral_mptt/variants/   currently vanilla only
-src/tiny_mistral_mptt/evaluation/ held-out NLL and lm-eval adapter
-configs/                          data/Mac/GPU experiment configs
-eval_configs/                     external benchmark suites
-docs/                             protocol, data contract, provenance
-tests/                            offline unit/contract tests
+src/tiny_mistral/                   frozen vanilla backbone
+src/tiny_mistral_mptt/attention/    research-only local memory attention
+src/tiny_mistral_mptt/data/         Dolmino materialization/mmap dataset
+src/tiny_mistral_mptt/training/     phases, pass/LR schedules, checkpointing
+src/tiny_mistral_mptt/variants/     vanilla, FBT, MemoryTape32
+src/tiny_mistral_mptt/evaluation/   one-pass NLL, pass-depth, lm-eval adapter
+configs/                            data/Mac/GPU experiment configs
+eval_configs/                       external benchmark suites
+docs/                               protocol, data, provenance, validation
+tests/                              offline unit/contract tests
 ```
 
-## Research provenance
-
-See `docs/UPSTREAMS.md`. The vanilla source derives from the validated
-`TinyMistralFork` implementation; no code from the older MPTT repositories is
-merged at this stage. The provenance document also records one deliberate
-non-numerical attention-dispatch hardening in the research copy rather than
-claiming a bit-for-bit source fork. Build-host test coverage and the remaining
-Mac/network integration gates are recorded in `docs/VALIDATION.md`.
+See `docs/UPSTREAMS.md` for provenance and `docs/VALIDATION.md` for the tested
+and still-pending hardware gates.

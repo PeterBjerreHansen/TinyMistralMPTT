@@ -67,3 +67,41 @@ def test_checkpoint_rejects_training_config_changes(tmp_path):
             expected_manifest_sha256="same",
             expected_experiment_config={"variant": "vanilla", "batch_size": 2, "output_dir": "b", "resume_from": str(path)},
         )
+
+
+def test_version1_checkpoint_allows_new_default_config_fields(tmp_path):
+    model = torch.nn.Linear(2, 2)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, foreach=False)
+    sampler = StatefulBlockSampler(5, seed=3)
+    path = save_checkpoint(
+        tmp_path / "state-v2.pt",
+        model=model,
+        optimizer=optimizer,
+        sampler_state=sampler.state_dict(),
+        train_state=TrainState(),
+        experiment_config={"variant": "vanilla", "batch_size": 1, "output_dir": "a", "resume_from": None},
+        data_manifest_sha256="same",
+    )
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    payload["format_version"] = 1
+    payload.pop("pass_scheduler", None)
+    v1 = tmp_path / "state-v1.pt"
+    torch.save(payload, v1)
+
+    replacement = torch.nn.Linear(2, 2)
+    replacement_optimizer = torch.optim.AdamW(replacement.parameters(), lr=1e-3, foreach=False)
+    state, _ = load_checkpoint(
+        v1,
+        model=replacement,
+        optimizer=replacement_optimizer,
+        expected_manifest_sha256="same",
+        expected_experiment_config={
+            "variant": "vanilla",
+            "batch_size": 1,
+            "output_dir": "new",
+            "resume_from": str(v1),
+            "phase": "B",
+            "pass_schedule": None,
+        },
+    )
+    assert state == TrainState()

@@ -11,13 +11,17 @@ from tiny_mistral_mptt.training.trainer import Trainer
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the vanilla continued-pretraining vertical slice.")
+    parser = argparse.ArgumentParser(description="Run a TinyMistral continued-pretraining experiment stage.")
     parser.add_argument("--config", required=True)
-    parser.add_argument("--resume-from", default=None)
+    parser.add_argument("--resume-from", default=None, help="exactly resume optimizer/RNG/data/pass-scheduler state")
+    parser.add_argument("--init-from", default=None, help="load model weights only and begin a fresh run")
     args = parser.parse_args()
     cfg = load_experiment_config(args.config)
     if args.resume_from is not None:
         cfg.resume_from = args.resume_from
+    if args.init_from is not None:
+        cfg.init_from = args.init_from
+    cfg.validate()
     device = resolve_device(cfg.device)
     model = load_variant(
         cfg.variant,
@@ -25,6 +29,8 @@ def main() -> None:
         device=device,
         dtype=cfg.dtype,
         attention_backend=cfg.attention_backend,
+        architecture_seed=cfg.architecture_seed,
+        memory_window=cfg.memory_window,
     )
     train_data = PackedTokenDataset(cfg.data_dir, "train")
     validation_data = PackedTokenDataset(cfg.data_dir, "validation")
@@ -38,7 +44,8 @@ def main() -> None:
     state = trainer.train()
     print(
         "PASS: training completed "
-        f"steps={state.optimizer_steps} unique_tokens={state.unique_tokens_seen} "
+        f"phase={state.phase} steps={state.optimizer_steps} "
+        f"unique_tokens={state.unique_tokens_seen} "
         f"token_equivalent={state.token_equivalent_compute}"
     )
 

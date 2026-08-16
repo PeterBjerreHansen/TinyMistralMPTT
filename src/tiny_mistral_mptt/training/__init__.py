@@ -1,8 +1,23 @@
-from .checkpoint import TrainState, load_checkpoint, save_checkpoint
+from .checkpoint import TrainState, load_checkpoint, load_model_weights, save_checkpoint
 from .phases import PhasePlan, configure_phase, vanilla_phase_a_is_noop
-from .trainer import Trainer
 
 __all__ = [
-    "TrainState", "load_checkpoint", "save_checkpoint", "PhasePlan",
-    "configure_phase", "vanilla_phase_a_is_noop", "Trainer",
+    "TrainState",
+    "load_checkpoint",
+    "load_model_weights",
+    "save_checkpoint",
+    "PhasePlan",
+    "configure_phase",
+    "vanilla_phase_a_is_noop",
+    "Trainer",
 ]
+
+
+def __getattr__(name):
+    # Avoid importing the trainer while variant modules import small training
+    # utilities (loss weighting), which would create a package import cycle.
+    if name == "Trainer":
+        from .trainer import Trainer
+
+        return Trainer
+    raise AttributeError(name)

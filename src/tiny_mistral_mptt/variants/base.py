@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable
+from collections.abc import Iterable, Sequence
 
 import torch
 import torch.nn as nn
@@ -16,22 +16,33 @@ class TrainOutput:
 
 
 class ExperimentalVariant(nn.Module):
-    """Small trainer-facing contract; intentionally not an MPTT framework yet."""
+    """Small trainer-facing contract shared by vanilla and multipass variants."""
 
     variant_name: str
 
-    def compute_loss(self, input_ids: torch.Tensor, *, phase: str = "B", passes: int = 1) -> TrainOutput:
+    def compute_loss(
+        self,
+        input_ids: torch.Tensor,
+        *,
+        phase: str = "B",
+        passes: int = 1,
+        loss_weights: Sequence[float] | None = None,
+    ) -> TrainOutput:
         raise NotImplementedError
 
     def added_parameters(self) -> Iterable[nn.Parameter]:
         """Parameters absent from the validated vanilla backbone."""
         return ()
 
+    def pretrained_parameters(self) -> Iterable[nn.Parameter]:
+        added_ids = {id(parameter) for parameter in self.added_parameters()}
+        return (parameter for parameter in self.parameters() if id(parameter) not in added_ids)
+
     def set_phase(self, phase: str) -> None:
         if phase not in {"A", "B"}:
             raise ValueError("phase must be 'A' or 'B'")
         if phase == "A":
-            added_ids = {id(p) for p in self.added_parameters()}
+            added_ids = {id(parameter) for parameter in self.added_parameters()}
             for parameter in self.parameters():
                 parameter.requires_grad_(id(parameter) in added_ids)
         else:

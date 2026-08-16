@@ -1,4 +1,4 @@
-.PHONY: test compile download verify hf-check hf-layers hf-embeds mps-smoke prepare-dev verify-data train-mac eval-nll eval-quick offline-check mac-gates
+.PHONY: test compile download verify hf-check hf-layers hf-embeds mps-smoke prepare-dev verify-data train-mac eval-nll eval-quick offline-check mac-gates fbt-a fbt-b memory-a memory-b fbt-depth memory-depth
 
 test:
 	uv run pytest -q
@@ -35,8 +35,26 @@ verify-data:
 train-mac:
 	uv run python scripts/train.py --config configs/mac/vanilla.yaml
 
+fbt-a:
+	uv run python scripts/train.py --config configs/mac/fbt_phase_a.yaml
+
+fbt-b:
+	uv run python scripts/train.py --config configs/mac/fbt_phase_b.yaml
+
+memory-a:
+	uv run python scripts/train.py --config configs/mac/memory_tape32_phase_a.yaml
+
+memory-b:
+	uv run python scripts/train.py --config configs/mac/memory_tape32_phase_b.yaml
+
+fbt-depth:
+	uv run python scripts/eval_pass_depth.py --config configs/mac/fbt_phase_b.yaml --checkpoint runs/mac-fbt-phase-b/latest.pt --passes 8
+
+memory-depth:
+	uv run python scripts/eval_pass_depth.py --config configs/mac/memory_tape32_phase_b.yaml --checkpoint runs/mac-memory-tape32-phase-b/latest.pt --passes 8
+
 eval-nll:
-	uv run python scripts/eval_nll.py --config configs/mac/vanilla.yaml --max-blocks 32
+	uv run python scripts/eval_nll.py --config configs/mac/vanilla.yaml
 
 eval-quick:
 	uv run python scripts/eval_lm.py --config configs/mac/vanilla.yaml --suite eval_configs/quick.yaml --limit 100

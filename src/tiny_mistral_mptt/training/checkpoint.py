@@ -44,14 +44,16 @@ def save_checkpoint(
     train_state: TrainState,
     experiment_config: dict,
     data_manifest_sha256: str,
+    pass_scheduler_state: dict[str, Any] | None = None,
 ) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "format_version": 1,
+        "format_version": 2,
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
         "sampler": sampler_state,
+        "pass_scheduler": pass_scheduler_state,
         "train_state": asdict(train_state),
         "rng": capture_rng_state(),
         "experiment_config": experiment_config,
@@ -64,10 +66,22 @@ def save_checkpoint(
 
 
 def _resume_config_view(config: dict) -> dict:
-    # These fields identify where/how a resume is invoked, not the training
-    # trajectory itself. Every other field must remain identical.
+    # These fields identify where/how a resume is invoked, not the trajectory.
     ignored = {"output_dir", "resume_from"}
     return {key: value for key, value in config.items() if key not in ignored}
+
+
+def load_model_weights(path: str | Path, *, model: torch.nn.Module) -> dict[str, Any]:
+    """Load model parameters only from an experiment checkpoint for ``init_from``."""
+    payload = torch.load(Path(path), map_location="cpu", weights_only=False)
+    if payload.get("format_version") not in {1, 2}:
+        raise ValueError("unsupported experiment checkpoint format")
+    model.load_state_dict(payload["model"], strict=True)
+    return {
+        "source_path": str(path),
+        "source_train_state": payload.get("train_state"),
+        "source_experiment_config": payload.get("experiment_config"),
+    }
 
 
 def load_checkpoint(
@@ -77,22 +91,43 @@ def load_checkpoint(
     optimizer: torch.optim.Optimizer,
     expected_manifest_sha256: str,
     expected_experiment_config: dict | None = None,
+    pass_scheduler=None,
 ) -> tuple[TrainState, dict]:
     payload = torch.load(Path(path), map_location="cpu", weights_only=False)
-    if payload.get("format_version") != 1:
+    version = payload.get("format_version")
+    if version not in {1, 2}:
         raise ValueError("unsupported experiment checkpoint format")
     if payload["data_manifest_sha256"] != expected_manifest_sha256:
         raise ValueError("data manifest changed across resume")
     if expected_experiment_config is not None:
         recorded = _resume_config_view(payload["experiment_config"])
         requested = _resume_config_view(expected_experiment_config)
-        if recorded != requested:
+        if version == 1:
+            # Bootstrap checkpoints predate the newly added multipass fields.
+            # Compare every trajectory field they actually recorded while
+            # allowing new default-only fields to be absent. Pass-scheduler
+            # compatibility is checked separately below.
+            changed = sorted(
+                key for key, value in recorded.items()
+                if requested.get(key) != value
+            )
+        else:
             changed = sorted(
                 key for key in set(recorded) | set(requested)
                 if recorded.get(key) != requested.get(key)
             )
+        if changed:
             raise ValueError(f"experiment config changed across resume: {changed}")
     model.load_state_dict(payload["model"], strict=True)
     optimizer.load_state_dict(payload["optimizer"])
+    if pass_scheduler is not None:
+        scheduler_state = payload.get("pass_scheduler")
+        if scheduler_state is None:
+            # Version-1 vanilla checkpoints predate pass scheduling. They are
+            # compatible only with the implicit fixed one-pass schedule.
+            if pass_scheduler.stages != [{"until_tokens": None, "probabilities": {1: 1.0}}]:
+                raise ValueError("checkpoint predates pass scheduler and is not compatible with this schedule")
+        else:
+            pass_scheduler.load_state_dict(scheduler_state)
     restore_rng_state(payload["rng"])
     return TrainState(**payload["train_state"]), payload["sampler"]
