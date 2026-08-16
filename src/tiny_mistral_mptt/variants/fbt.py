@@ -29,6 +29,7 @@ class FBTVariant(MultiPassVariant):
         prefix_mixin_probability: float = 0.0,
     ):
         super().__init__(backbone, prefix_mixin_probability=prefix_mixin_probability)
+        self.initialization_stats: dict[str, float] | None = None
         hidden_size = int(backbone.config.hidden_size)
         with torch.random.fork_rng(devices=[]):
             torch.manual_seed(int(initialization_seed))
@@ -66,6 +67,85 @@ class FBTVariant(MultiPassVariant):
         # avoids an in-place overwrite on an autograd-tracked tensor.
         feedback = torch.cat((token_embeddings[:, :1, :], fused[:, 1:, :]), dim=1)
         return self.apply_prefix_mixin(token_embeddings, feedback)
+
+    @staticmethod
+    def _rms(value: torch.Tensor) -> float:
+        return float(value.float().square().mean().sqrt().detach().cpu())
+
+    @staticmethod
+    def _std(value: torch.Tensor) -> float:
+        return float(value.float().std(unbiased=False).detach().cpu())
+
+    def calibrate_initialization(
+        self,
+        input_ids: torch.Tensor,
+        *,
+        gate_logit_std_target: float = 1.0,
+    ) -> dict[str, float]:
+        """Rescale only the added FBT matrices using one fixed calibration batch.
+
+        ``feedback_value`` is calibrated after the gate scale so the final
+        fused feedback RMS matches the token-embedding RMS on non-initial
+        positions. The gate matrix is scaled to a configurable logit standard
+        deviation, which avoids a gate that is effectively constant at 0.5
+        when the pretrained embedding RMS is unusually small.
+        """
+        if input_ids.ndim != 2 or input_ids.shape[1] < 2:
+            raise ValueError("input_ids must be [B,T] with at least two tokens")
+        if not torch.isfinite(torch.tensor(gate_logit_std_target)) or gate_logit_std_target <= 0:
+            raise ValueError("gate_logit_std_target must be finite and positive")
+
+        was_training = self.training
+        self.eval()
+        with torch.no_grad():
+            token_embeddings = self.backbone.model.embed_tokens(input_ids)
+            previous_hidden = self._run_first_hidden(input_ids)
+            shifted = self.shift_previous(previous_hidden)
+            value = self.feedback_value(shifted)
+            gate_logits = self.feedback_gate(token_embeddings)
+
+            non_initial = (slice(None), slice(1, None), slice(None))
+            embedding_rms = self._rms(token_embeddings[non_initial])
+            pre_value_rms = self._rms(value[non_initial])
+            pre_gate_logit_std = self._std(gate_logits)
+            pre_gate = torch.sigmoid(gate_logits)
+            pre_fused_rms = self._rms((value * pre_gate)[non_initial])
+
+            if pre_gate_logit_std <= torch.finfo(torch.float32).eps:
+                raise RuntimeError("cannot calibrate FBT gate with zero logit variation")
+            gate_scale = float(gate_logit_std_target) / pre_gate_logit_std
+            self.feedback_gate.weight.mul_(gate_scale)
+
+            gate_logits = self.feedback_gate(token_embeddings)
+            gate = torch.sigmoid(gate_logits)
+            fused_before_value_rescale = value * gate
+            fused_rms_before_value_rescale = self._rms(fused_before_value_rescale[non_initial])
+            if fused_rms_before_value_rescale <= torch.finfo(torch.float32).eps:
+                raise RuntimeError("cannot calibrate FBT value pathway with zero fused RMS")
+            value_scale = embedding_rms / fused_rms_before_value_rescale
+            self.feedback_value.weight.mul_(value_scale)
+
+            value = self.feedback_value(shifted)
+            fused = value * gate
+            post_gate_logit_std = self._std(gate_logits)
+            post_gate = torch.sigmoid(gate_logits)
+            post_fused_rms = self._rms(fused[non_initial])
+            post_gate_std = self._std(post_gate)
+
+        if was_training:
+            self.train()
+        return {
+            "embedding_rms": embedding_rms,
+            "pre_value_rms": pre_value_rms,
+            "pre_gate_logit_std": pre_gate_logit_std,
+            "pre_gate_std": self._std(pre_gate),
+            "pre_fused_rms": pre_fused_rms,
+            "gate_scale": gate_scale,
+            "value_scale": value_scale,
+            "post_gate_logit_std": post_gate_logit_std,
+            "post_gate_std": post_gate_std,
+            "post_fused_rms": post_fused_rms,
+        }
 
     def _run_feedback_hidden(
         self,
