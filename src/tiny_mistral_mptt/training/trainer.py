@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from collections import defaultdict
 import json
-from pathlib import Path
 import random
 import time
+from collections import defaultdict
+from pathlib import Path
 
 import torch
 
@@ -51,7 +51,9 @@ class Trainer:
     ):
         config.validate()
         if train_data.manifest != validation_data.manifest:
-            raise ValueError("train and validation datasets must come from the same artifact")
+            raise ValueError(
+                "train and validation datasets must come from the same artifact"
+            )
         self.model = model
         self.config = config
         self.train_data = train_data
@@ -70,7 +72,9 @@ class Trainer:
 
         initialization_provenance = None
         if config.init_from:
-            initialization_provenance = load_model_weights(config.init_from, model=self.model)
+            initialization_provenance = load_model_weights(
+                config.init_from, model=self.model
+            )
 
         trainable = configure_phase(model, config.phase)
         if trainable == 0:
@@ -165,11 +169,16 @@ class Trainer:
         for group in self.optimizer.param_groups:
             flags = {id(parameter) in added_ids for parameter in group["params"]}
             if len(flags) != 1:
-                raise RuntimeError("optimizer group mixes pretrained and added parameters")
+                raise RuntimeError(
+                    "optimizer group mixes pretrained and added parameters"
+                )
             is_added = next(iter(flags))
             name = "added" if is_added else "pretrained"
             group.setdefault("group_name", name)
-            group.setdefault("base_lr", self.config.added_lr if is_added else self.config.pretrained_lr)
+            group.setdefault(
+                "base_lr",
+                self.config.added_lr if is_added else self.config.pretrained_lr,
+            )
 
     def _set_lr(self) -> dict[str, float]:
         multiplier = lr_multiplier(
@@ -252,20 +261,30 @@ class Trainer:
     def train(self, *, until_unique_tokens: int | None = None) -> TrainState:
         cfg = self.config
         tokens_per_micro = cfg.batch_size * self.train_data.sequence_length
-        target_tokens = cfg.max_unique_tokens if until_unique_tokens is None else int(until_unique_tokens)
+        target_tokens = (
+            cfg.max_unique_tokens
+            if until_unique_tokens is None
+            else int(until_unique_tokens)
+        )
         if not self.state.unique_tokens_seen <= target_tokens <= cfg.max_unique_tokens:
-            raise ValueError("until_unique_tokens must lie between current progress and max_unique_tokens")
+            raise ValueError(
+                "until_unique_tokens must lie between current progress and max_unique_tokens"
+            )
         if target_tokens % tokens_per_micro:
             raise ValueError(
                 "token budget must be divisible by batch_size * sequence_length so the run ends exactly"
             )
         next_eval = (
-            ((self.state.unique_tokens_seen // cfg.eval_every_tokens) + 1) * cfg.eval_every_tokens
-            if cfg.eval_every_tokens else None
+            ((self.state.unique_tokens_seen // cfg.eval_every_tokens) + 1)
+            * cfg.eval_every_tokens
+            if cfg.eval_every_tokens
+            else None
         )
         next_checkpoint = (
-            ((self.state.unique_tokens_seen // cfg.checkpoint_every_tokens) + 1) * cfg.checkpoint_every_tokens
-            if cfg.checkpoint_every_tokens else None
+            ((self.state.unique_tokens_seen // cfg.checkpoint_every_tokens) + 1)
+            * cfg.checkpoint_every_tokens
+            if cfg.checkpoint_every_tokens
+            else None
         )
         self.model.train()
         while self.state.unique_tokens_seen < target_tokens:
@@ -274,7 +293,9 @@ class Trainer:
             update_loss = 0.0
             update_passes = 0
             update_metrics: dict[str, float] = defaultdict(float)
-            remaining_micro = (target_tokens - self.state.unique_tokens_seen) // tokens_per_micro
+            remaining_micro = (
+                target_tokens - self.state.unique_tokens_seen
+            ) // tokens_per_micro
             accumulation_steps = min(cfg.grad_accum_steps, remaining_micro)
             if accumulation_steps <= 0:
                 raise RuntimeError("invalid zero-length optimizer update")
@@ -297,8 +318,12 @@ class Trainer:
                     update_metrics[key] += float(value)
                 self.state.micro_steps += 1
                 self.state.unique_tokens_seen += int(ids.numel())
-                self.state.token_equivalent_compute += int(ids.numel()) * output.effective_passes
-            grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), cfg.grad_clip)
+                self.state.token_equivalent_compute += (
+                    int(ids.numel()) * output.effective_passes
+                )
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), cfg.grad_clip
+            )
             if not bool(torch.isfinite(grad_norm).item()):
                 raise RuntimeError("non-finite gradient norm")
             lr_record = self._set_lr()
@@ -320,7 +345,10 @@ class Trainer:
                 **lr_record,
             }
             record.update(
-                {key: value / accumulation_steps for key, value in sorted(update_metrics.items())}
+                {
+                    key: value / accumulation_steps
+                    for key, value in sorted(update_metrics.items())
+                }
             )
             _append_jsonl(self.metrics_path, record)
 
@@ -328,7 +356,10 @@ class Trainer:
                 self._evaluate()
                 while next_eval <= self.state.unique_tokens_seen:
                     next_eval += cfg.eval_every_tokens
-            if next_checkpoint is not None and self.state.unique_tokens_seen >= next_checkpoint:
+            if (
+                next_checkpoint is not None
+                and self.state.unique_tokens_seen >= next_checkpoint
+            ):
                 self._checkpoint()
                 while next_checkpoint <= self.state.unique_tokens_seen:
                     next_checkpoint += cfg.checkpoint_every_tokens

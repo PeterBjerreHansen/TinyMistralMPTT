@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from itertools import pairwise
 from typing import Any
 
 
@@ -27,13 +28,15 @@ def cosine_lr_multiplier(
     return min_lr_ratio + (1.0 - min_lr_ratio) * cosine
 
 
-def piecewise_linear_multiplier(tokens_seen: int, points: list[list[float] | tuple[float, float]]) -> float:
+def piecewise_linear_multiplier(
+    tokens_seen: int, points: list[list[float] | tuple[float, float]]
+) -> float:
     if tokens_seen < 0:
         raise ValueError("tokens_seen must be non-negative")
     parsed = [(int(point[0]), float(point[1])) for point in points]
     if tokens_seen <= parsed[0][0]:
         return parsed[0][1]
-    for (left_t, left_y), (right_t, right_y) in zip(parsed, parsed[1:]):
+    for (left_t, left_y), (right_t, right_y) in pairwise(parsed):
         if tokens_seen <= right_t:
             if right_t == left_t:
                 return right_y

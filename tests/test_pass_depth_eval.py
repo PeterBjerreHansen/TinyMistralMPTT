@@ -1,11 +1,14 @@
 from pathlib import Path
 
 import torch
-
 from conftest import micro_config
+
 from tiny_mistral.modeling import MistralForCausalLM
 from tiny_mistral_mptt.data.packed_dataset import PackedTokenDataset
-from tiny_mistral_mptt.data.prepare import PreparationRequest, materialize_from_document_iterators
+from tiny_mistral_mptt.data.prepare import (
+    PreparationRequest,
+    materialize_from_document_iterators,
+)
 from tiny_mistral_mptt.data.recipes import DOLMINO_50B_SOURCES
 from tiny_mistral_mptt.evaluation.pass_depth import evaluate_pass_depth
 from tiny_mistral_mptt.variants.fbt import FBTVariant
@@ -32,7 +35,10 @@ def make_artifact(root: Path):
             vocab_size=97,
             bos_token_id=1,
         ),
-        iterators={source.name: iter(fake_docs(i)) for i, source in enumerate(DOLMINO_50B_SOURCES)},
+        iterators={
+            source.name: iter(fake_docs(i))
+            for i, source in enumerate(DOLMINO_50B_SOURCES)
+        },
         tokenize=lambda text: [3 + (ord(ch) % 80) for ch in text],
     )
 

@@ -1,12 +1,11 @@
 import pytest
 import torch
-
 from conftest import micro_config
+
 from tiny_mistral.modeling import MistralForCausalLM
 from tiny_mistral_mptt.training.phases import configure_phase
 from tiny_mistral_mptt.variants.fbt import FBTVariant
 from tiny_mistral_mptt.variants.memory_tape32 import MemoryTape32Variant
-
 
 pytestmark = pytest.mark.skipif(
     not torch.backends.mps.is_available(),
@@ -17,7 +16,9 @@ pytestmark = pytest.mark.skipif(
 @pytest.mark.parametrize("variant_name", ["fbt", "memory_tape32"])
 def test_multipass_variants_forward_backward_on_mps(variant_name):
     config = micro_config()
-    backbone = MistralForCausalLM(config, attention_backend="auto").to("mps", dtype=torch.float32)
+    backbone = MistralForCausalLM(config, attention_backend="auto").to(
+        "mps", dtype=torch.float32
+    )
     if variant_name == "fbt":
         model = FBTVariant(backbone, initialization_seed=17)
     else:
@@ -28,6 +29,10 @@ def test_multipass_variants_forward_backward_on_mps(variant_name):
     output = model.compute_loss(ids, phase="A", passes=2, loss_weights=[0.0, 1.0])
     assert torch.isfinite(output.loss)
     output.loss.backward()
-    grads = [parameter.grad for parameter in model.added_parameters() if parameter.grad is not None]
+    grads = [
+        parameter.grad
+        for parameter in model.added_parameters()
+        if parameter.grad is not None
+    ]
     assert grads
     assert all(bool(torch.isfinite(grad).all().item()) for grad in grads)

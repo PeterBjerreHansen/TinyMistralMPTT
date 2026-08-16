@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 from tiny_mistral.modeling import MistralForCausalLM
 
@@ -58,9 +58,13 @@ class FBTVariant(MultiPassVariant):
         previous_hidden: torch.Tensor,
     ) -> torch.Tensor:
         if token_embeddings.shape != previous_hidden.shape:
-            raise ValueError("token_embeddings and previous_hidden must have identical [B,T,D] shape")
+            raise ValueError(
+                "token_embeddings and previous_hidden must have identical [B,T,D] shape"
+            )
         shifted = self.shift_previous(previous_hidden)
-        fused = self.feedback_value(shifted) * torch.sigmoid(self.feedback_gate(token_embeddings))
+        fused = self.feedback_value(shifted) * torch.sigmoid(
+            self.feedback_gate(token_embeddings)
+        )
         if fused.shape[1] == 1:
             return token_embeddings
         # Position zero has no previous-token feedback state. Concatenation
@@ -92,7 +96,10 @@ class FBTVariant(MultiPassVariant):
         """
         if input_ids.ndim != 2 or input_ids.shape[1] < 2:
             raise ValueError("input_ids must be [B,T] with at least two tokens")
-        if not torch.isfinite(torch.tensor(gate_logit_std_target)) or gate_logit_std_target <= 0:
+        if (
+            not torch.isfinite(torch.tensor(gate_logit_std_target))
+            or gate_logit_std_target <= 0
+        ):
             raise ValueError("gate_logit_std_target must be finite and positive")
 
         was_training = self.training
@@ -112,16 +119,22 @@ class FBTVariant(MultiPassVariant):
             pre_fused_rms = self._rms((value * pre_gate)[non_initial])
 
             if pre_gate_logit_std <= torch.finfo(torch.float32).eps:
-                raise RuntimeError("cannot calibrate FBT gate with zero logit variation")
+                raise RuntimeError(
+                    "cannot calibrate FBT gate with zero logit variation"
+                )
             gate_scale = float(gate_logit_std_target) / pre_gate_logit_std
             self.feedback_gate.weight.mul_(gate_scale)
 
             gate_logits = self.feedback_gate(token_embeddings)
             gate = torch.sigmoid(gate_logits)
             fused_before_value_rescale = value * gate
-            fused_rms_before_value_rescale = self._rms(fused_before_value_rescale[non_initial])
+            fused_rms_before_value_rescale = self._rms(
+                fused_before_value_rescale[non_initial]
+            )
             if fused_rms_before_value_rescale <= torch.finfo(torch.float32).eps:
-                raise RuntimeError("cannot calibrate FBT value pathway with zero fused RMS")
+                raise RuntimeError(
+                    "cannot calibrate FBT value pathway with zero fused RMS"
+                )
             value_scale = embedding_rms / fused_rms_before_value_rescale
             self.feedback_value.weight.mul_(value_scale)
 
@@ -155,4 +168,6 @@ class FBTVariant(MultiPassVariant):
     ) -> torch.Tensor:
         del input_ids
         feedback = self.feedback_inputs(token_embeddings, previous_hidden)
-        return self.backbone.model(inputs_embeds=feedback, use_cache=False).last_hidden_state
+        return self.backbone.model(
+            inputs_embeds=feedback, use_cache=False
+        ).last_hidden_state

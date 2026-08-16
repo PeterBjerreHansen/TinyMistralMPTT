@@ -1,6 +1,6 @@
 import torch
-
 from conftest import micro_config
+
 from tiny_mistral.modeling import MistralForCausalLM
 from tiny_mistral_mptt.training.phases import configure_phase
 from tiny_mistral_mptt.variants.memory_tape32 import MemoryTape32Variant
@@ -29,7 +29,9 @@ def test_memory_tape_manual_decoder_is_vanilla_when_memory_residual_is_zero():
     with torch.no_grad():
         for reader in variant.memory_readers:
             reader.o_proj.weight.zero_()
-        expected = variant.backbone.model(inputs_embeds=embeddings, use_cache=False).last_hidden_state
+        expected = variant.backbone.model(
+            inputs_embeds=embeddings, use_cache=False
+        ).last_hidden_state
         actual = variant._run_feedback_hidden(ids, embeddings, previous)
     torch.testing.assert_close(actual, expected, atol=0, rtol=0)
 

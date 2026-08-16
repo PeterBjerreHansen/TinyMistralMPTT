@@ -26,7 +26,9 @@ def _nll(logits: torch.Tensor, ids: torch.Tensor) -> tuple[float, int]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run causal memory interventions for MemoryTape32.")
+    parser = argparse.ArgumentParser(
+        description="Run causal memory interventions for MemoryTape32."
+    )
     parser.add_argument("--config", required=True)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--max-blocks", type=int, default=None)
@@ -55,10 +57,15 @@ def main() -> None:
     model.eval()
 
     dataset = PackedTokenDataset(cfg.data_dir, "validation")
-    blocks = len(dataset) if args.max_blocks is None else min(len(dataset), args.max_blocks)
+    blocks = (
+        len(dataset) if args.max_blocks is None else min(len(dataset), args.max_blocks)
+    )
     if blocks <= 0:
         raise SystemExit("no validation blocks selected")
-    totals = {name: {"loss": 0.0, "count": 0, "delta_sq": 0.0} for name in ("real_memory", "zero_memory", "mismatched_memory")}
+    totals = {
+        name: {"loss": 0.0, "count": 0, "delta_sq": 0.0}
+        for name in ("real_memory", "zero_memory", "mismatched_memory")
+    }
     with torch.no_grad():
         for index in range(blocks):
             ids = dataset.batch([index], device=device)
@@ -66,9 +73,15 @@ def main() -> None:
             token_embeddings = model.backbone.model.embed_tokens(ids)
             first_hidden = model._run_first_hidden(ids)
             mismatch_hidden = model._run_first_hidden(mismatch_ids)
-            real_hidden = model._run_feedback_hidden(ids, token_embeddings, first_hidden)
-            zero_hidden = model._run_feedback_hidden(ids, token_embeddings, torch.zeros_like(first_hidden))
-            mismatched_hidden = model._run_feedback_hidden(ids, token_embeddings, mismatch_hidden)
+            real_hidden = model._run_feedback_hidden(
+                ids, token_embeddings, first_hidden
+            )
+            zero_hidden = model._run_feedback_hidden(
+                ids, token_embeddings, torch.zeros_like(first_hidden)
+            )
+            mismatched_hidden = model._run_feedback_hidden(
+                ids, token_embeddings, mismatch_hidden
+            )
             for name, hidden in (
                 ("real_memory", real_hidden),
                 ("zero_memory", zero_hidden),
@@ -77,7 +90,11 @@ def main() -> None:
                 logits = model.backbone.lm_head(hidden).float()
                 loss, count = _nll(logits, ids)
                 delta_sq = float(
-                    (hidden.float() - first_hidden.float()).square().mean().detach().cpu()
+                    (hidden.float() - first_hidden.float())
+                    .square()
+                    .mean()
+                    .detach()
+                    .cpu()
                 )
                 totals[name]["loss"] += loss
                 totals[name]["count"] += count

@@ -19,7 +19,9 @@ def _rms(value: torch.Tensor) -> float:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Measure FBT feedback and gate scales on a fixed validation block.")
+    parser = argparse.ArgumentParser(
+        description="Measure FBT feedback and gate scales on a fixed validation block."
+    )
     parser.add_argument("--config", required=True)
     parser.add_argument("--checkpoint", default=None)
     parser.add_argument("--block-index", type=int, default=0)
@@ -45,7 +47,9 @@ def main() -> None:
         payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
         expected = file_sha256(f"{cfg.data_dir}/manifest.json")
         if payload.get("data_manifest_sha256") != expected:
-            raise RuntimeError("checkpoint was trained against a different data manifest")
+            raise RuntimeError(
+                "checkpoint was trained against a different data manifest"
+            )
         model.load_state_dict(payload["model"], strict=True)
     model.eval()
     dataset = PackedTokenDataset(cfg.data_dir, "validation")

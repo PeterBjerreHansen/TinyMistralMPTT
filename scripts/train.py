@@ -4,19 +4,29 @@ from __future__ import annotations
 import argparse
 import json
 
-from tiny_mistral_mptt.variants.fbt import FBTVariant
 from tiny_mistral.device import resolve_device
 from tiny_mistral_mptt.config import load_experiment_config
 from tiny_mistral_mptt.data.packed_dataset import PackedTokenDataset
 from tiny_mistral_mptt.model_factory import load_variant
 from tiny_mistral_mptt.training.trainer import Trainer
+from tiny_mistral_mptt.variants.fbt import FBTVariant
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run a TinyMistral continued-pretraining experiment stage.")
+    parser = argparse.ArgumentParser(
+        description="Run a TinyMistral continued-pretraining experiment stage."
+    )
     parser.add_argument("--config", required=True)
-    parser.add_argument("--resume-from", default=None, help="exactly resume optimizer/RNG/data/pass-scheduler state")
-    parser.add_argument("--init-from", default=None, help="load model weights only and begin a fresh run")
+    parser.add_argument(
+        "--resume-from",
+        default=None,
+        help="exactly resume optimizer/RNG/data/pass-scheduler state",
+    )
+    parser.add_argument(
+        "--init-from",
+        default=None,
+        help="load model weights only and begin a fresh run",
+    )
     parser.add_argument("--until-unique-tokens", type=int, default=None)
     args = parser.parse_args()
     cfg = load_experiment_config(args.config)
@@ -41,18 +51,25 @@ def main() -> None:
     if cfg.fbt_initialization == "calibrated":
         if not isinstance(model, FBTVariant):
             raise SystemExit("calibrated FBT initialization requires variant=fbt")
-        calibration_data = train_data if cfg.fbt_calibration_split == "train" else validation_data
+        calibration_data = (
+            train_data if cfg.fbt_calibration_split == "train" else validation_data
+        )
         if not 0 <= cfg.fbt_calibration_block < len(calibration_data):
             raise SystemExit(
                 f"fbt_calibration_block must be in [0, {len(calibration_data)})"
             )
-        calibration_ids = calibration_data.batch([cfg.fbt_calibration_block], device=device)
+        calibration_ids = calibration_data.batch(
+            [cfg.fbt_calibration_block], device=device
+        )
         calibration_stats = model.calibrate_initialization(
             calibration_ids,
             gate_logit_std_target=cfg.fbt_gate_logit_std_target,
         )
         model.initialization_stats = calibration_stats
-        print("FBT initialization calibration " + json.dumps(calibration_stats, sort_keys=True))
+        print(
+            "FBT initialization calibration "
+            + json.dumps(calibration_stats, sort_keys=True)
+        )
     trainer = Trainer(
         model=model,
         config=cfg,

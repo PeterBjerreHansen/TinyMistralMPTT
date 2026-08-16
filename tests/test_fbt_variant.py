@@ -1,6 +1,6 @@
 import torch
-
 from conftest import micro_config
+
 from tiny_mistral.modeling import MistralForCausalLM
 from tiny_mistral_mptt.training.phases import configure_phase
 from tiny_mistral_mptt.variants.fbt import FBTVariant
@@ -74,11 +74,17 @@ def test_fbt_prefix_mixin_reverts_a_checkpoint_reproducible_prefix():
         )
 
     torch.manual_seed(99)
-    expected_prefix = int(torch.randint(1, embeddings.shape[1] + 1, (), device="cpu").item())
+    expected_prefix = int(
+        torch.randint(1, embeddings.shape[1] + 1, (), device="cpu").item()
+    )
     torch.manual_seed(99)
     mixed = variant.feedback_inputs(embeddings, previous)
-    torch.testing.assert_close(mixed[:, :expected_prefix, :], embeddings[:, :expected_prefix, :])
-    torch.testing.assert_close(mixed[:, expected_prefix:, :], raw[:, expected_prefix:, :])
+    torch.testing.assert_close(
+        mixed[:, :expected_prefix, :], embeddings[:, :expected_prefix, :]
+    )
+    torch.testing.assert_close(
+        mixed[:, expected_prefix:, :], raw[:, expected_prefix:, :]
+    )
 
 
 def test_fbt_calibrated_initialization_matches_embedding_and_gate_scales():

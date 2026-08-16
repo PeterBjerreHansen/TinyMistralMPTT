@@ -7,7 +7,12 @@ import torch
 from tiny_mistral.loading import load_model
 from tiny_mistral.modeling import MistralForCausalLM
 
-from .variants import ExperimentalVariant, FBTVariant, MemoryTape32Variant, VanillaVariant
+from .variants import (
+    ExperimentalVariant,
+    FBTVariant,
+    MemoryTape32Variant,
+    VanillaVariant,
+)
 
 
 def build_variant(

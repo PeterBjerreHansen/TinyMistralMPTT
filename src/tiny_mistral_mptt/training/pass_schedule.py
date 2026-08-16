@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections import Counter
 import random
+from collections import Counter
 from typing import Any
 
 from ..config import normalize_pass_schedule
@@ -53,4 +53,6 @@ class PassScheduler:
             raise ValueError("pass schedule changed across resume")
         self._rng.setstate(state["rng_state"])
         self.samples = int(state["samples"])
-        self.histogram = Counter({int(key): int(value) for key, value in state["histogram"].items()})
+        self.histogram = Counter(
+            {int(key): int(value) for key, value in state["histogram"].items()}
+        )

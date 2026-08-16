@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from pathlib import Path
 import os
 import random
+from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -108,12 +108,12 @@ def load_checkpoint(
             # allowing new default-only fields to be absent. Pass-scheduler
             # compatibility is checked separately below.
             changed = sorted(
-                key for key, value in recorded.items()
-                if requested.get(key) != value
+                key for key, value in recorded.items() if requested.get(key) != value
             )
         else:
             changed = sorted(
-                key for key in set(recorded) | set(requested)
+                key
+                for key in set(recorded) | set(requested)
                 if recorded.get(key) != requested.get(key)
             )
         if changed:
@@ -125,8 +125,12 @@ def load_checkpoint(
         if scheduler_state is None:
             # Version-1 vanilla checkpoints predate pass scheduling. They are
             # compatible only with the implicit fixed one-pass schedule.
-            if pass_scheduler.stages != [{"until_tokens": None, "probabilities": {1: 1.0}}]:
-                raise ValueError("checkpoint predates pass scheduler and is not compatible with this schedule")
+            if pass_scheduler.stages != [
+                {"until_tokens": None, "probabilities": {1: 1.0}}
+            ]:
+                raise ValueError(
+                    "checkpoint predates pass scheduler and is not compatible with this schedule"
+                )
         else:
             pass_scheduler.load_state_dict(scheduler_state)
     restore_rng_state(payload["rng"])

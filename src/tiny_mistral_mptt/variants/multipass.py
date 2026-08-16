@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import torch
 
@@ -34,7 +34,9 @@ class MultiPassVariant(ExperimentalVariant):
     TinyMistral backbone.
     """
 
-    def __init__(self, backbone: MistralForCausalLM, *, prefix_mixin_probability: float = 0.0):
+    def __init__(
+        self, backbone: MistralForCausalLM, *, prefix_mixin_probability: float = 0.0
+    ):
         super().__init__()
         self.backbone = backbone
         if not 0.0 <= float(prefix_mixin_probability) <= 1.0:
@@ -49,7 +51,9 @@ class MultiPassVariant(ExperimentalVariant):
         return self.backbone.get_input_embeddings()
 
     def _run_first_hidden(self, input_ids: torch.Tensor) -> torch.Tensor:
-        return self.backbone.model(input_ids=input_ids, use_cache=False).last_hidden_state
+        return self.backbone.model(
+            input_ids=input_ids, use_cache=False
+        ).last_hidden_state
 
     def _run_feedback_hidden(
         self,
@@ -72,16 +76,25 @@ class MultiPassVariant(ExperimentalVariant):
         intact when prefix mixing is enabled.
         """
         if token_embeddings.shape != feedback_inputs.shape:
-            raise ValueError("token_embeddings and feedback_inputs must have identical shapes")
+            raise ValueError(
+                "token_embeddings and feedback_inputs must have identical shapes"
+            )
         probability = self.prefix_mixin_probability
         if probability <= 0.0 or feedback_inputs.shape[1] <= 1:
             return feedback_inputs
-        should_mix = probability >= 1.0 or float(torch.rand((), device="cpu")) < probability
+        should_mix = (
+            probability >= 1.0 or float(torch.rand((), device="cpu")) < probability
+        )
         if not should_mix:
             return feedback_inputs
-        prefix_length = int(torch.randint(1, feedback_inputs.shape[1] + 1, (), device="cpu").item())
+        prefix_length = int(
+            torch.randint(1, feedback_inputs.shape[1] + 1, (), device="cpu").item()
+        )
         return torch.cat(
-            (token_embeddings[:, :prefix_length, :], feedback_inputs[:, prefix_length:, :]),
+            (
+                token_embeddings[:, :prefix_length, :],
+                feedback_inputs[:, prefix_length:, :],
+            ),
             dim=1,
         )
 
@@ -130,7 +143,9 @@ class MultiPassVariant(ExperimentalVariant):
         hidden_states = self._run_hidden_passes(input_ids, passes=passes, phase=phase)
         return MultiPassResult(
             tuple(
-                PassResult(hidden_states=hidden, logits=self.backbone.lm_head(hidden).float())
+                PassResult(
+                    hidden_states=hidden, logits=self.backbone.lm_head(hidden).float()
+                )
                 for hidden in hidden_states
             )
         )
@@ -155,7 +170,10 @@ class MultiPassVariant(ExperimentalVariant):
             device=pass_losses[-1].device,
             dtype=pass_losses[-1].dtype,
         )
-        loss = sum(weight * pass_loss for weight, pass_loss in zip(weights, pass_losses, strict=True))
+        loss = sum(
+            weight * pass_loss
+            for weight, pass_loss in zip(weights, pass_losses, strict=True)
+        )
         metrics = {
             f"pass_{index + 1}_loss": float(pass_loss.detach().cpu())
             for index, pass_loss in enumerate(pass_losses)

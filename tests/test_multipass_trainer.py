@@ -1,12 +1,15 @@
 from pathlib import Path
 
 import torch
-
 from conftest import micro_config
+
 from tiny_mistral.modeling import MistralForCausalLM
 from tiny_mistral_mptt.config import ExperimentConfig
 from tiny_mistral_mptt.data.packed_dataset import PackedTokenDataset
-from tiny_mistral_mptt.data.prepare import PreparationRequest, materialize_from_document_iterators
+from tiny_mistral_mptt.data.prepare import (
+    PreparationRequest,
+    materialize_from_document_iterators,
+)
 from tiny_mistral_mptt.data.recipes import DOLMINO_50B_SOURCES
 from tiny_mistral_mptt.training.trainer import Trainer
 from tiny_mistral_mptt.variants.fbt import FBTVariant
@@ -33,7 +36,10 @@ def make_artifact(root: Path):
             vocab_size=97,
             bos_token_id=1,
         ),
-        iterators={source.name: iter(fake_docs(i)) for i, source in enumerate(DOLMINO_50B_SOURCES)},
+        iterators={
+            source.name: iter(fake_docs(i))
+            for i, source in enumerate(DOLMINO_50B_SOURCES)
+        },
         tokenize=lambda text: [3 + (ord(ch) % 80) for ch in text],
     )
 
@@ -52,7 +58,10 @@ def test_phase_a_fixed_two_pass_training_counts_compute_and_freezes_backbone(tmp
     train = PackedTokenDataset(data_dir, "train")
     val = PackedTokenDataset(data_dir, "validation")
     model = make_fbt()
-    before = {name: tensor.detach().clone() for name, tensor in model.backbone.state_dict().items()}
+    before = {
+        name: tensor.detach().clone()
+        for name, tensor in model.backbone.state_dict().items()
+    }
     cfg = ExperimentConfig(
         variant="fbt",
         phase="A",
@@ -71,7 +80,13 @@ def test_phase_a_fixed_two_pass_training_counts_compute_and_freezes_backbone(tmp
         eval_batches=0,
         checkpoint_every_tokens=0,
     )
-    state = Trainer(model=model, config=cfg, train_data=train, validation_data=val, device=torch.device("cpu")).train()
+    state = Trainer(
+        model=model,
+        config=cfg,
+        train_data=train,
+        validation_data=val,
+        device=torch.device("cpu"),
+    ).train()
     assert state.unique_tokens_seen == 32
     assert state.token_equivalent_compute == 64
     for name, tensor in model.backbone.state_dict().items():
@@ -100,8 +115,17 @@ def test_phase_b_has_independent_pretrained_and_added_learning_rates(tmp_path):
         eval_batches=0,
         checkpoint_every_tokens=0,
     )
-    trainer = Trainer(model=make_fbt(), config=cfg, train_data=train, validation_data=val, device=torch.device("cpu"))
-    groups = {group["group_name"]: group["base_lr"] for group in trainer.optimizer.param_groups}
+    trainer = Trainer(
+        model=make_fbt(),
+        config=cfg,
+        train_data=train,
+        validation_data=val,
+        device=torch.device("cpu"),
+    )
+    groups = {
+        group["group_name"]: group["base_lr"]
+        for group in trainer.optimizer.param_groups
+    }
     assert groups == {"pretrained": 1e-6, "added": 1e-4}
 
 
@@ -170,27 +194,27 @@ def test_mixed_pass_schedule_resume_is_bit_exact(tmp_path):
     make_artifact(data_dir)
     train = PackedTokenDataset(data_dir, "train")
     val = PackedTokenDataset(data_dir, "validation")
-    common = dict(
-        variant="fbt",
-        phase="B",
-        model_dir="unused",
-        data_dir=str(data_dir),
-        device="cpu",
-        attention_backend="reference",
-        seed=55,
-        architecture_seed=77,
-        batch_size=1,
-        grad_accum_steps=1,
-        max_unique_tokens=64,
-        pass_schedule=[{"probabilities": {1: 0.4, 2: 0.4, 3: 0.2}}],
-        pass_loss_weights=[0.05, 0.20, 0.75],
-        pretrained_learning_rate=1e-4,
-        added_learning_rate=1e-4,
-        lr_schedule={"type": "constant"},
-        eval_every_tokens=0,
-        eval_batches=0,
-        checkpoint_every_tokens=0,
-    )
+    common = {
+        "variant": "fbt",
+        "phase": "B",
+        "model_dir": "unused",
+        "data_dir": str(data_dir),
+        "device": "cpu",
+        "attention_backend": "reference",
+        "seed": 55,
+        "architecture_seed": 77,
+        "batch_size": 1,
+        "grad_accum_steps": 1,
+        "max_unique_tokens": 64,
+        "pass_schedule": [{"probabilities": {1: 0.4, 2: 0.4, 3: 0.2}}],
+        "pass_loss_weights": [0.05, 0.20, 0.75],
+        "pretrained_learning_rate": 1e-4,
+        "added_learning_rate": 1e-4,
+        "lr_schedule": {"type": "constant"},
+        "eval_every_tokens": 0,
+        "eval_batches": 0,
+        "checkpoint_every_tokens": 0,
+    }
 
     full = make_fbt(seed=77)
     full_cfg = ExperimentConfig(output_dir=str(tmp_path / "full"), **common)
@@ -203,7 +227,9 @@ def test_mixed_pass_schedule_resume_is_bit_exact(tmp_path):
     ).train()
 
     interrupted = make_fbt(seed=77)
-    interrupted_cfg = ExperimentConfig(output_dir=str(tmp_path / "interrupted"), **common)
+    interrupted_cfg = ExperimentConfig(
+        output_dir=str(tmp_path / "interrupted"), **common
+    )
     Trainer(
         model=interrupted,
         config=interrupted_cfg,
