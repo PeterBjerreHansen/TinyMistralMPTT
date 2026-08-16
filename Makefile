@@ -1,4 +1,4 @@
-.PHONY: test compile download verify hf-check hf-layers hf-embeds mps-smoke prepare-dev verify-data train-mac eval-nll eval-quick offline-check mac-gates fbt-a fbt-b memory-a memory-b fbt-depth memory-depth
+.PHONY: test compile download verify hf-check hf-layers hf-embeds mps-smoke prepare-dev verify-data train-mac eval-nll eval-quick offline-check mac-gates fbt-a fbt-b memory-a memory-b memoryadd-a memoryadd-b fbt-depth memory-depth memoryadd-depth memoryadd-interventions
 
 test:
 	uv run pytest -q
@@ -46,6 +46,18 @@ memory-a:
 
 memory-b:
 	uv run python scripts/train.py --config configs/mac/memory_tape32_phase_b.yaml
+
+memoryadd-a:
+	uv run python scripts/train.py --config configs/mac/memory_add_phase_a.yaml
+
+memoryadd-b:
+	uv run python scripts/train.py --config configs/mac/memory_add_phase_b.yaml
+
+memoryadd-depth:
+	uv run python scripts/eval_pass_depth.py --config configs/mac/memory_add_phase_a.yaml --checkpoint runs/mac-memory-add-phase-a/latest.pt --passes 8
+
+memoryadd-interventions:
+	uv run python scripts/eval_memory_interventions.py --config configs/mac/memory_add_phase_a.yaml --checkpoint runs/mac-memory-add-phase-a/latest.pt
 
 fbt-depth:
 	uv run python scripts/eval_pass_depth.py --config configs/mac/fbt_phase_b.yaml --checkpoint runs/mac-fbt-phase-b/latest.pt --passes 8

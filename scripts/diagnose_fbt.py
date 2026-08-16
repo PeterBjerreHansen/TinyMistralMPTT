@@ -52,6 +52,7 @@ def main() -> None:
             )
         model.load_state_dict(payload["model"], strict=True)
     model.eval()
+
     dataset = PackedTokenDataset(cfg.data_dir, "validation")
     if not 0 <= args.block_index < len(dataset):
         raise SystemExit(f"block index must be in [0, {len(dataset)})")
@@ -72,9 +73,11 @@ def main() -> None:
             "rms_previous_top_hidden_h": _rms(previous_hidden),
             "rms_feedback_value_WUh": _rms(feedback_value),
             "gate_mean": float(gate.mean().detach().cpu()),
-            "gate_std": float(gate.std().detach().cpu()),
+            "gate_std": float(gate.std(unbiased=False).detach().cpu()),
             "gate_logit_mean": float(gate_logits.mean().detach().cpu()),
-            "gate_logit_std": float(gate_logits.std().detach().cpu()),
+            "gate_logit_std": float(
+                gate_logits.std(unbiased=False).detach().cpu()
+            ),
             "rms_fused_nonzero_positions": _rms(fused[:, 1:, :]),
             "rms_actual_feedback_input": _rms(feedback_inputs[:, 1:, :]),
             "rms_position0_embedding": _rms(feedback_inputs[:, :1, :]),

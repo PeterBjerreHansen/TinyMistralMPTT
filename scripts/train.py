@@ -29,12 +29,14 @@ def main() -> None:
     )
     parser.add_argument("--until-unique-tokens", type=int, default=None)
     args = parser.parse_args()
+
     cfg = load_experiment_config(args.config)
     if args.resume_from is not None:
         cfg.resume_from = args.resume_from
     if args.init_from is not None:
         cfg.init_from = args.init_from
     cfg.validate()
+
     device = resolve_device(cfg.device)
     model = load_variant(
         cfg.variant,
@@ -48,6 +50,7 @@ def main() -> None:
     )
     train_data = PackedTokenDataset(cfg.data_dir, "train")
     validation_data = PackedTokenDataset(cfg.data_dir, "validation")
+
     if cfg.fbt_initialization == "calibrated":
         if not isinstance(model, FBTVariant):
             raise SystemExit("calibrated FBT initialization requires variant=fbt")
@@ -70,6 +73,7 @@ def main() -> None:
             "FBT initialization calibration "
             + json.dumps(calibration_stats, sort_keys=True)
         )
+
     trainer = Trainer(
         model=model,
         config=cfg,

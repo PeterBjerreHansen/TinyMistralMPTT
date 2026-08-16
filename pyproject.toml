@@ -25,7 +25,6 @@ data = [
   "datasets>=4.0,<5",
   "huggingface_hub>=0.25",
   "tokenizers>=0.20",
-  "zstandard>=0.23",
 ]
 eval = [
   "lm-eval==0.4.12",
@@ -36,7 +35,6 @@ all = [
   "huggingface_hub>=0.25",
   "lm-eval==0.4.12",
   "tokenizers>=0.20",
-  "zstandard>=0.23",
 ]
 
 [dependency-groups]

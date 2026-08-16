@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 import torch
-from torch import nn
+import torch.nn as nn
 
 from tiny_mistral.modeling import MistralForCausalLM, MistralRMSNorm
 
@@ -14,9 +14,7 @@ from .multipass import MultiPassVariant
 class MemoryTapeReader(nn.Module):
     """Mistral-shaped GQA cross-attention into a strict-past local memory tape."""
 
-    def __init__(
-        self, backbone: MistralForCausalLM, *, window: int, initialization_seed: int
-    ):
+    def __init__(self, backbone: MistralForCausalLM, *, window: int, initialization_seed: int):
         super().__init__()
         config = backbone.config
         self.hidden_size = int(config.hidden_size)
@@ -30,25 +28,15 @@ class MemoryTapeReader(nn.Module):
             torch.manual_seed(int(initialization_seed))
             self.query_norm = MistralRMSNorm(self.hidden_size, eps=config.rms_norm_eps)
             self.memory_norm = MistralRMSNorm(self.hidden_size, eps=config.rms_norm_eps)
-            self.q_proj = nn.Linear(
-                self.hidden_size, self.num_heads * self.head_dim, bias=False
-            )
-            self.k_proj = nn.Linear(
-                self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False
-            )
-            self.v_proj = nn.Linear(
-                self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False
-            )
-            self.o_proj = nn.Linear(
-                self.num_heads * self.head_dim, self.hidden_size, bias=False
-            )
+            self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=False)
+            self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
+            self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
+            self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
             std = float(config.initializer_range)
             for module in (self.q_proj, self.k_proj, self.v_proj, self.o_proj):
                 nn.init.normal_(module.weight, mean=0.0, std=std)
 
-    def forward(
-        self, hidden_states: torch.Tensor, memory_states: torch.Tensor
-    ) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor, memory_states: torch.Tensor) -> torch.Tensor:
         if hidden_states.shape != memory_states.shape:
             raise ValueError("hidden_states and memory_states must share [B,T,D]")
         bsz, seq_len, _ = hidden_states.shape
@@ -58,12 +46,8 @@ class MemoryTapeReader(nn.Module):
         value = self.v_proj(memory)
 
         query = query.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-        key = key.view(bsz, seq_len, self.num_key_value_heads, self.head_dim).transpose(
-            1, 2
-        )
-        value = value.view(
-            bsz, seq_len, self.num_key_value_heads, self.head_dim
-        ).transpose(1, 2)
+        key = key.view(bsz, seq_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        value = value.view(bsz, seq_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
         output = strict_past_local_attention(
             query,
             key,
@@ -116,15 +100,11 @@ class MemoryTape32Variant(MultiPassVariant):
         if token_embeddings.shape != previous_hidden.shape:
             raise ValueError("token embeddings and previous memory must share [B,T,D]")
         bsz, seq_len, _ = token_embeddings.shape
-        position_ids = torch.arange(
-            seq_len, device=token_embeddings.device, dtype=torch.long
-        )
+        position_ids = torch.arange(seq_len, device=token_embeddings.device, dtype=torch.long)
         position_ids = position_ids[None, :].expand(bsz, -1)
 
         hidden_states = token_embeddings
-        for layer, memory_reader in zip(
-            self.backbone.model.layers, self.memory_readers, strict=True
-        ):
+        for layer, memory_reader in zip(self.backbone.model.layers, self.memory_readers, strict=True):
             residual = hidden_states
             x = layer.input_layernorm(hidden_states)
             x, _ = layer.self_attn(
@@ -137,9 +117,7 @@ class MemoryTape32Variant(MultiPassVariant):
             )
             hidden_states = residual + x
 
-            hidden_states = hidden_states + memory_reader(
-                hidden_states, previous_hidden
-            )
+            hidden_states = hidden_states + memory_reader(hidden_states, previous_hidden)
 
             residual = hidden_states
             x = layer.post_attention_layernorm(hidden_states)

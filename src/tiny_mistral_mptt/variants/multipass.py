@@ -26,6 +26,21 @@ class MultiPassResult:
         return self.passes[-1]
 
 
+def shift_previous_hidden(previous_hidden: torch.Tensor) -> torch.Tensor:
+    """Right-shift a [B,T,D] previous-pass state by exactly one token.
+
+    Position zero has no causal predecessor and is therefore filled with zeros.
+    This helper defines the shared alignment contract for single-state feedback
+    variants such as FBT and MemoryAdd.
+    """
+    if previous_hidden.ndim != 3:
+        raise ValueError("previous_hidden must be [B,T,D]")
+    shifted = torch.zeros_like(previous_hidden)
+    if previous_hidden.shape[1] > 1:
+        shifted[:, 1:, :] = previous_hidden[:, :-1, :]
+    return shifted
+
+
 class MultiPassVariant(ExperimentalVariant):
     """Shared pass recurrence and objective plumbing for research variants.
 

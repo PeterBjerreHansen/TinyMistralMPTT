@@ -1,13 +1,14 @@
-# Experimental protocol: FBT and MemoryTape32 phase
+# Experimental protocol: one-state feedback and MemoryTape32 phase
 
 ## Scope
 
-This phase compares three first-class models on the same pretrained TinyMistral
+This phase compares four first-class models on the same pretrained TinyMistral
 backbone and deterministic Dolmino token stream:
 
 1. `vanilla`
 2. `fbt`
-3. `memory_tape32`
+3. `memory_add`
+4. `memory_tape32`
 
 No chunked-memory or hybrid design is part of this phase. The purpose is to
 establish clean finite-pass training behavior before adding further model
@@ -32,6 +33,23 @@ W_U h^(k-1)_(t-1) * sigmoid(W_G e_t)
 and position zero retains `e_0`. The added modules are two bias-free
 `hidden_size x hidden_size` projections.
 
+### MemoryAdd
+
+Pass one is vanilla. For pass `k>1`, the previous pass's final top-layer states
+are shifted one token to the right and used as a learned additive input
+residual:
+
+```text
+x_t = e_t + W_M RMSNorm(h^(k-1)_(t-1))
+```
+
+Position zero has no predecessor and therefore receives an exact zero residual.
+The bias-free `hidden_size x hidden_size` projection `W_M` is zero-initialized,
+so every pass depth is exactly vanilla at initialization. The current TinyMistral
+variant deliberately reuses the previous top hidden state directly; unlike the
+older standalone prototype it does not add a separate learned memory-write head.
+This isolates one-state recurrent bandwidth from the FBT fusion operator.
+
 ### MemoryTape32
 
 Pass one is vanilla. For pass `k>1`, each decoder layer has a separate residual
@@ -52,7 +70,7 @@ configurable experimental parameter.
 
 ## Pass 1 parity gate
 
-For both multipass architectures:
+For all multipass architectures:
 
 ```text
 variant.compute_passes(ids, passes=1).pass[0]
@@ -61,7 +79,7 @@ variant.compute_passes(ids, passes=1).pass[0]
 must be numerically identical to direct vanilla TinyMistral. Research modules
 are skipped, not merely multiplied by a zero gate.
 
-`src/tiny_mistral/` is not modified to implement either architecture.
+`src/tiny_mistral/` is not modified to implement any research architecture.
 
 ## Flexible pass objective
 
@@ -83,7 +101,7 @@ pass_loss_weights: [0.0, 1.0]
 ```
 
 The last form is useful for a wiring-only Phase A. `null` means uniform weights.
-The objective is common to FBT and MemoryTape32 so architecture comparisons do
+The objective machinery is common to FBT, MemoryAdd, and MemoryTape32 so architecture comparisons do
 not silently change supervision.
 
 ## Pass-count schedule
@@ -214,6 +232,15 @@ pass depth on the fixed validation artifact. It records:
 
 This is the principal wiring/stability diagnostic.
 
+### Previous-state interventions
+
+`scripts/eval_memory_interventions.py` supports `memory_add` and
+`memory_tape32`. It compares the real previous-pass state against an all-zero
+state and a state taken from a different validation sequence. For MemoryAdd,
+zero state is an exact vanilla input path even after training, because
+`RMSNorm(0)=0` and the memory projection has no bias. The evaluator additionally
+reports MemoryAdd residual RMS relative to token-embedding RMS to detect bypass.
+
 ### External benchmark harness
 
 The existing lm-evaluation-harness adapter currently exercises ordinary
@@ -223,7 +250,7 @@ control but is not yet the primary multipass metric.
 ## Generation boundary
 
 Finite-pass training/evaluation is implemented first. Online recurrent
-generation for FBT and MemoryTape32 is intentionally not included yet. Until
+generation for FBT, MemoryAdd, and MemoryTape32 is intentionally not included yet. Until
 that gate is implemented, multipass wrappers delegate public `generate()` to
 vanilla TinyMistral and must not be presented as recurrent decoders.
 
@@ -234,6 +261,8 @@ The first useful run is intentionally modest:
 ```text
 FBT Phase A             fixed K=2
 FBT Phase B             fixed K=2
+MemoryAdd Phase A       fixed K=2
+MemoryAdd Phase B       fixed K=2 (only after Phase-A gate)
 MemoryTape32 Phase A    fixed K=2
 MemoryTape32 Phase B    fixed K=2
 ```
@@ -248,6 +277,6 @@ For each multipass model inspect:
 - added parameter count;
 - tokens/sec and token-equivalent compute.
 
-Only after both architectures clear this gate should pass-weight curricula,
+Only after the relevant architecture clears its finite-pass gate should pass-weight curricula,
 mixed pass schedules, larger datasets, multiple seeds, or recurrent decoding be
 expensive priorities.

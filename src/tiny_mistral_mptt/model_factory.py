@@ -10,6 +10,7 @@ from tiny_mistral.modeling import MistralForCausalLM
 from .variants import (
     ExperimentalVariant,
     FBTVariant,
+    MemoryAddVariant,
     MemoryTape32Variant,
     VanillaVariant,
 )
@@ -31,6 +32,8 @@ def build_variant(
             initialization_seed=architecture_seed,
             prefix_mixin_probability=prefix_mixin_probability,
         )
+    elif name == "memory_add":
+        variant = MemoryAddVariant(backbone)
     elif name == "memory_tape32":
         variant = MemoryTape32Variant(
             backbone,

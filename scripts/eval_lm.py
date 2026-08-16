@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
+import json
 from pathlib import Path
-
 import torch
 import yaml
 
@@ -18,9 +17,7 @@ from tiny_mistral_mptt.model_factory import load_variant
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Run a checked-in lm-evaluation-harness suite."
-    )
+    parser = argparse.ArgumentParser(description="Run a checked-in lm-evaluation-harness suite.")
     parser.add_argument("--config", required=True)
     parser.add_argument("--suite", default="eval_configs/quick.yaml")
     parser.add_argument("--checkpoint", default=None)
@@ -30,18 +27,12 @@ def main() -> None:
     try:
         import lm_eval
     except ImportError as exc:
-        raise SystemExit(
-            "install evaluation dependencies with: uv sync --extra eval"
-        ) from exc
+        raise SystemExit("install evaluation dependencies with: uv sync --extra eval") from exc
 
     cfg = load_experiment_config(args.config)
     device = resolve_device(cfg.device)
     model = load_variant(
-        cfg.variant,
-        cfg.model_dir,
-        device=device,
-        dtype=cfg.dtype,
-        attention_backend=cfg.attention_backend,
+        cfg.variant, cfg.model_dir, device=device, dtype=cfg.dtype, attention_backend=cfg.attention_backend,
         architecture_seed=cfg.architecture_seed,
         memory_window=cfg.memory_window,
         prefix_mixin_probability=cfg.prefix_mixin_probability,

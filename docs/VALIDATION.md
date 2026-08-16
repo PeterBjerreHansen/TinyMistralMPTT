@@ -1,12 +1,13 @@
 # Validation record
 
-This document separates the already validated vanilla substrate from the new
-multipass code that still requires Apple/CUDA integration runs.
+This document separates the already validated vanilla substrate, the multipass
+experiments already exercised on the target Mac, and the new MemoryAdd code that
+still requires its first full Mac Phase-A run.
 
 ## Vanilla Mac acceptance (2026-08-16)
 
 The repository bootstrap was exercised on the target Mac/MPS development
-machine before FBT/MemoryTape32 model code was added:
+machine before the multipass models were added:
 
 - `uv sync --extra data --extra eval` resolved successfully.
 - Full local suite: 63 passed.
@@ -24,77 +25,133 @@ machine before FBT/MemoryTape32 model code was added:
 - The quick lm-evaluation-harness integration completed all six 20-example
   development tasks without model/evaluator failure.
 
-These results validate the data/trainer/evaluation substrate, not the new
-multipass architectures.
+These results validate the data/trainer/evaluation substrate.
 
-## Multipass offline acceptance in the implementation environment
+## Multipass Mac results already obtained
 
-The implementation host is Linux/CPU and has no model/dataset network access or
-MPS/CUDA hardware. The complete offline suite after adding FBT, MemoryTape32,
-flexible pass schedules/objectives, optimizer groups, and pass-depth evaluation
-currently passes: 86 passed, 3 skipped (all skips are MPS hardware-only).
+The `mptt_v1` branch has also been exercised on the target Mac for the first FBT
+and MemoryTape32 experiments. These are experimental observations rather than
+claims of tuned final performance.
 
-Coverage includes:
+### MemoryTape32
 
-- all inherited vanilla model/cache/mask/generation/training tests;
-- FBT one-pass exact vanilla parity;
-- strict previous-position FBT shift semantics;
-- FBT Phase-A gradients restricted to added parameters;
-- strict-past O(T*W) memory attention against a dense GQA oracle;
-- exclusion of current/future and too-old memory positions;
-- MemoryTape32 one-pass exact vanilla parity;
-- MemoryTape32 manual decoder equivalence when its memory residual is zero;
-- MemoryTape32 Phase-A gradients restricted to memory-reader parameters;
-- right-aligned normalized pass-loss weighting;
-- staged/stateful pass-scheduler exact restore;
-- constant/cosine/piecewise-linear LR machinery;
-- independent pretrained/added optimizer LR groups;
-- Phase-A token-equivalent compute accounting;
-- `init_from` model-only transfer into a fresh Phase-B run;
-- bit-exact interrupted/resumed FBT training under a stochastic 1/2/3-pass
-  schedule;
-- pass-depth NLL and hidden-state-delta evaluation contracts.
+Frozen-backbone Phase A completed successfully. Full pass-depth validation was:
 
-The three skips are the inherited Apple MPS smoke plus two new FBT/MemoryTape32 MPS forward/backward tests.
+```text
+pass 1: 2.6645
+pass 2: 2.6056
+pass 3: 2.6065
+pass 4: 2.6063
+```
 
-## Required Mac gates for the new variants
+A causal intervention confirmed that the actual previous-pass memory content is
+useful:
 
-Before treating FBT or MemoryTape32 as experimentally ready, run on the Mac:
+```text
+real previous-pass memory: 2.6056
+zeroed memory:             2.6645
+mismatched memory:         2.6430
+```
+
+This is the current strongest finite-pass retrofit result in the repository.
+
+### FBT
+
+The original frozen-backbone Phase A was unstable after the vanilla pass:
+
+```text
+2.6645 -> 6.3028 -> 8.4157 -> 8.1146
+```
+
+A 262,144-token prefix-free co-adaptation run with pretrained LR `1e-7`, added
+LR `1e-5`, and fixed two-pass training improved pass-2 NLL monotonically but
+remained far from vanilla. A subsequent calibrated-initialization run matched
+fused-input RMS to token-embedding RMS and set gate-logit standard deviation to
+1.0. It improved full pass-2 NLL from 5.886 to 5.575, but still did not justify
+pass-3+ training. FBT remains a valid implemented comparison, but it is not the
+current reference for recurrent-system development.
+
+## Offline acceptance after adding MemoryAdd
+
+The implementation host is Linux/CPU and has no MPS/CUDA runtime. The complete
+offline suite after adding MemoryAdd passes:
+
+```text
+99 passed, 4 skipped
+```
+
+All four skips are MPS hardware-only: the inherited MPS smoke plus one MPS
+forward/backward case each for FBT, MemoryAdd, and MemoryTape32.
+
+Coverage includes all previous vanilla/FBT/MemoryTape32 tests plus the following
+MemoryAdd-specific contracts:
+
+- one-pass exact vanilla parity;
+- zero-initialized passes 1-4 are all exactly vanilla;
+- strict one-token previous-pass alignment with an exact zero residual at
+  position zero;
+- shared causal shift semantics with FBT;
+- zero previous state remains an exact vanilla input path even after the reader
+  projection changes;
+- Phase A freezes the full pretrained backbone while the zero-initialized
+  memory projection receives a finite nonzero gradient;
+- Phase B allows gradients into the pretrained backbone;
+- MemoryAdd construction does not advance the global PyTorch RNG;
+- factory/config registration and dtype propagation;
+- strict state-dict roundtrip of added parameters;
+- full shared-trainer Phase-A smoke with correct unique/token-equivalent compute
+  accounting and unchanged pretrained weights;
+- MPS forward/backward coverage is present and will run automatically on Apple
+  hardware.
+
+Compilation also passes with:
+
+```bash
+python -m compileall -q src scripts tests
+```
+
+## Required Mac gate for MemoryAdd
+
+Before starting MemoryAdd Phase B, run:
 
 ```bash
 uv run pytest -q
 
-uv run python scripts/train.py --config configs/mac/fbt_phase_a.yaml
-uv run python scripts/eval_pass_depth.py \
-  --config configs/mac/fbt_phase_a.yaml \
-  --checkpoint runs/mac-fbt-phase-a/latest.pt \
-  --passes 4
+uv run python scripts/train.py \
+  --config configs/mac/memory_add_phase_a.yaml
 
-uv run python scripts/train.py --config configs/mac/memory_tape32_phase_a.yaml
 uv run python scripts/eval_pass_depth.py \
-  --config configs/mac/memory_tape32_phase_a.yaml \
-  --checkpoint runs/mac-memory-tape32-phase-a/latest.pt \
-  --passes 4
+  --config configs/mac/memory_add_phase_a.yaml \
+  --checkpoint runs/mac-memory-add-phase-a/latest.pt \
+  --passes 8
+
+uv run python scripts/eval_memory_interventions.py \
+  --config configs/mac/memory_add_phase_a.yaml \
+  --checkpoint runs/mac-memory-add-phase-a/latest.pt
 ```
 
-Check finite losses/gradients, MPS memory use, throughput, pass-1 NLL parity,
-pass-2 behavior, and repeated-pass stability before starting Phase B.
+The acceptance questions are deliberately scientific rather than merely
+operational:
 
-If Phase A is healthy, then run the checked-in Phase-B starting configurations:
+1. Does pass 1 stay at the vanilla NLL?
+2. Does pass 2 improve materially below vanilla under a frozen backbone?
+3. Does real previous state beat both zero and mismatched state?
+4. Do passes 3-8 remain finite and reasonably stable?
+5. Is the learned memory residual nontrivial relative to the token embedding,
+   rather than remaining effectively bypassed?
+
+Only if these gates are healthy should the checked-in conservative Phase-B
+starting point be run:
 
 ```bash
-uv run python scripts/train.py --config configs/mac/fbt_phase_b.yaml
-uv run python scripts/train.py --config configs/mac/memory_tape32_phase_b.yaml
+uv run python scripts/train.py \
+  --config configs/mac/memory_add_phase_b.yaml
 ```
-
-The provided LR ratios, pass weights, and fixed-two-pass schedule are starting
-points and should be treated as experimental configuration rather than frozen
-protocol.
 
 ## CUDA gate
 
 No CUDA efficiency claim is validated in this phase. Before a rented-GPU run,
-benchmark the vanilla, FBT, and MemoryTape32 variants at the intended context
-length and record peak memory, tokens/sec, and effective pass count. The local
-MemoryTape reader uses ordinary PyTorch O(T*W) tensor operations on both MPS and
-CUDA; it is intentionally not yet a bespoke CUDA kernel.
+benchmark vanilla, MemoryAdd, FBT, and MemoryTape32 at the intended context
+length and record peak memory, tokens/sec, parameter count, and effective pass
+count. Recurrent decoding is intentionally still deferred until the finite-pass
+MemoryAdd gate has been inspected.

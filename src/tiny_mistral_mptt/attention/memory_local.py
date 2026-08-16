@@ -14,9 +14,7 @@ def _validate_qkv(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor) -
     if query.shape[0] != key.shape[0] or query.shape[-1] != key.shape[-1]:
         raise ValueError("query/key batch and head dimensions must align")
     if query.shape[-2] != key.shape[-2]:
-        raise ValueError(
-            "strict-past local attention requires equal Q/K sequence lengths"
-        )
+        raise ValueError("strict-past local attention requires equal Q/K sequence lengths")
     if query.shape[1] % key.shape[1] != 0:
         raise ValueError("query head count must be divisible by KV head count")
 
@@ -54,12 +52,14 @@ def strict_past_local_attention(
     # makes window t contain exactly original memory indices [t-W, ..., t-1].
     padded_key = F.pad(key, (0, 0, window, 0))
     padded_value = F.pad(value, (0, 0, window, 0))
-    key_windows = padded_key.unfold(dimension=-2, size=window, step=1).permute(
-        0, 1, 2, 4, 3
-    )[:, :, :seq_len, :, :]
-    value_windows = padded_value.unfold(dimension=-2, size=window, step=1).permute(
-        0, 1, 2, 4, 3
-    )[:, :, :seq_len, :, :]
+    key_windows = (
+        padded_key.unfold(dimension=-2, size=window, step=1)
+        .permute(0, 1, 2, 4, 3)[:, :, :seq_len, :, :]
+    )
+    value_windows = (
+        padded_value.unfold(dimension=-2, size=window, step=1)
+        .permute(0, 1, 2, 4, 3)[:, :, :seq_len, :, :]
+    )
 
     q_for_mm = grouped_query.permute(0, 1, 3, 2, 4)  # [B,Hkv,T,G,D]
     scores = torch.matmul(q_for_mm, key_windows.transpose(-2, -1))
@@ -68,14 +68,10 @@ def strict_past_local_attention(
     t = torch.arange(seq_len, device=query.device)
     j = torch.arange(window, device=query.device)
     valid = (t[:, None] - window + j[None, :]) >= 0
-    scores = scores.masked_fill(
-        ~valid[None, None, None, :, :], torch.finfo(scores.dtype).min
-    )
+    scores = scores.masked_fill(~valid[None, None, None, :, :], torch.finfo(scores.dtype).min)
 
     probabilities = F.softmax(scores, dim=-1, dtype=torch.float32).to(query.dtype)
-    probabilities = probabilities * valid[None, None, None, :, :].to(
-        probabilities.dtype
-    )
+    probabilities = probabilities * valid[None, None, None, :, :].to(probabilities.dtype)
     denominator = probabilities.sum(dim=-1, keepdim=True)
     probabilities = torch.where(
         denominator > 0,

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from collections.abc import Iterable, Sequence
 
 import torch
-from torch import nn
+import torch.nn as nn
 
 
 @dataclass
@@ -36,11 +36,7 @@ class ExperimentalVariant(nn.Module):
 
     def pretrained_parameters(self) -> Iterable[nn.Parameter]:
         added_ids = {id(parameter) for parameter in self.added_parameters()}
-        return (
-            parameter
-            for parameter in self.parameters()
-            if id(parameter) not in added_ids
-        )
+        return (parameter for parameter in self.parameters() if id(parameter) not in added_ids)
 
     def set_phase(self, phase: str) -> None:
         if phase not in {"A", "B"}:

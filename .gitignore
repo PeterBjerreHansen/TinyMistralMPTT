@@ -12,6 +12,6 @@ artifacts/
 *.pth
 *.safetensors
 .DS_Store
-/data/
+data/
 runs/
 .coverage

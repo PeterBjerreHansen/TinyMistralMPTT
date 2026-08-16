@@ -1,9 +1,6 @@
 import pytest
 
-from tiny_mistral_mptt.training.schedule import (
-    lr_multiplier,
-    piecewise_linear_multiplier,
-)
+from tiny_mistral_mptt.training.schedule import lr_multiplier, piecewise_linear_multiplier
 
 
 def test_piecewise_linear_schedule_interpolates_and_clamps():
@@ -15,13 +12,10 @@ def test_piecewise_linear_schedule_interpolates_and_clamps():
 
 
 def test_constant_lr_schedule_is_one():
-    assert (
-        lr_multiplier(
-            123,
-            total_tokens=1000,
-            schedule={"type": "constant"},
-            legacy_warmup_tokens=0,
-            legacy_min_lr_ratio=0.1,
-        )
-        == 1.0
-    )
+    assert lr_multiplier(
+        123,
+        total_tokens=1000,
+        schedule={"type": "constant"},
+        legacy_warmup_tokens=0,
+        legacy_min_lr_ratio=0.1,
+    ) == 1.0

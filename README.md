@@ -5,11 +5,13 @@ mechanisms onto the validated `M4-ai/TinyMistral-248M-v3` backbone.
 
 The repository deliberately keeps `src/tiny_mistral/` as the vanilla reference
 implementation and places all research behavior under `src/tiny_mistral_mptt/`.
-The first comparison supports three first-class variants:
+The current comparison supports four first-class variants:
 
 - `vanilla`: exact one-pass TinyMistral control;
 - `fbt`: asymmetric-GLU latent feedback from the previous pass's immediately
   preceding top-layer state;
+- `memory_add`: a zero-initialized additive residual from the previous pass's
+  immediately preceding top-layer state;
 - `memory_tape32`: per-layer GQA cross-attention to the previous pass's most
   recent 32 strictly earlier top-layer states.
 
@@ -17,9 +19,11 @@ No chunked-memory or hybrid model is implemented in this phase.
 
 ## Scientific invariants
 
-For both multipass variants, **pass 1 is the vanilla model**. Newly initialized
-research modules are skipped entirely on pass 1. A one-pass FBT or MemoryTape32
-forward must therefore reproduce vanilla TinyMistral exactly.
+For every multipass variant, **pass 1 is the vanilla model**. Newly initialized
+research modules are skipped entirely on pass 1. A one-pass FBT, MemoryAdd, or
+MemoryTape32 forward must therefore reproduce vanilla TinyMistral exactly.
+MemoryAdd is additionally zero-initialized so *all* pass depths reproduce vanilla
+exactly before training.
 
 Training is intentionally configurable rather than tied to one paper-specific
 recipe:
@@ -113,7 +117,41 @@ uv run python scripts/eval_pass_depth.py \
   --passes 8
 ```
 
-## 6. MemoryTape32 wiring and adaptation
+## 6. MemoryAdd one-state control
+
+MemoryAdd keeps the current token embedding on the normal pretrained path and
+adds a residual derived from the previous pass's immediately preceding top-layer
+state:
+
+```text
+x_t = e_t + W_M RMSNorm(h_(t-1)^(k-1))
+```
+
+`W_M` is zero-initialized. Consequently pass 2 (and deeper passes) are exact
+vanilla before training, making this a clean test of whether a single recurrent
+latent can learn a useful correction without replacing TinyMistral's input
+representation. Phase A freezes the backbone and trains only the added RMSNorm
+and projection.
+
+```bash
+uv run python scripts/train.py --config configs/mac/memory_add_phase_a.yaml
+
+uv run python scripts/eval_pass_depth.py \
+  --config configs/mac/memory_add_phase_a.yaml \
+  --checkpoint runs/mac-memory-add-phase-a/latest.pt \
+  --passes 8
+
+uv run python scripts/eval_memory_interventions.py \
+  --config configs/mac/memory_add_phase_a.yaml \
+  --checkpoint runs/mac-memory-add-phase-a/latest.pt
+```
+
+The intervention evaluator compares real, zeroed, and mismatched previous states
+and reports the MemoryAdd residual/embedding RMS ratio. Phase B is checked in as
+a conservative next-stage config but should only be run after the Phase-A depth
+and intervention gates are inspected.
+
+## 7. MemoryTape32 wiring and adaptation
 
 MemoryTape32 is an equal-status research variant, not scaffolding for another
 model. Each decoder layer reads the previous pass's top-layer memory tape via a
@@ -136,7 +174,7 @@ uv run python scripts/eval_pass_depth.py \
   --passes 8
 ```
 
-## 7. Flexible objectives and schedules
+## 8. Flexible objectives and schedules
 
 Pass supervision is independent of pass-count sampling. For example:
 
@@ -182,7 +220,7 @@ lr_schedule:
 The multiplier is applied to both parameter groups while preserving their LR
 ratio.
 
-## 8. `init_from` versus `resume_from`
+## 9. `init_from` versus `resume_from`
 
 `resume_from` means exact continuation. Model, optimizer, data sampler, Python
 and PyTorch RNG, pass-scheduler RNG/histogram, counters, and phase are restored.
@@ -192,7 +230,7 @@ Trajectory-changing config edits are rejected.
 optimizer/scheduler/data counters. This is the intended Phase-A -> Phase-B
 transition.
 
-## 9. Evaluation boundary
+## 10. Evaluation boundary
 
 `eval_nll.py` and the existing `lm-evaluation-harness` adapter retain **one-pass
 vanilla semantics** by default. This is deliberate: ordinary model calls still
@@ -202,11 +240,11 @@ mean the standard TinyMistral model.
 NLL/perplexity at every requested pass, per-source NLL at every pass, and RMS
 changes in top-layer hidden states between successive passes.
 
-Online recurrent generation for FBT and MemoryTape32 is intentionally deferred
+Online recurrent generation for FBT, MemoryAdd, and MemoryTape32 is intentionally deferred
 until their finite-pass training behavior has been validated. The current
 `generate()` method on multipass wrappers delegates to vanilla generation.
 
-## 10. External benchmark battery
+## 11. External benchmark battery
 
 The existing harness integration remains available for the one-pass control:
 
@@ -227,7 +265,7 @@ src/tiny_mistral/                   frozen vanilla backbone
 src/tiny_mistral_mptt/attention/    research-only local memory attention
 src/tiny_mistral_mptt/data/         Dolmino materialization/mmap dataset
 src/tiny_mistral_mptt/training/     phases, pass/LR schedules, checkpointing
-src/tiny_mistral_mptt/variants/     vanilla, FBT, MemoryTape32
+src/tiny_mistral_mptt/variants/     vanilla, FBT, MemoryAdd, MemoryTape32
 src/tiny_mistral_mptt/evaluation/   one-pass NLL, pass-depth, lm-eval adapter
 configs/                            data/Mac/GPU experiment configs
 eval_configs/                       external benchmark suites

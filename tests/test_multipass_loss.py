@@ -24,7 +24,5 @@ def test_short_pass_weight_vector_is_left_zero_padded():
 
 
 def test_default_weights_are_uniform():
-    weights = normalize_pass_weights(
-        None, 3, device=torch.device("cpu"), dtype=torch.float32
-    )
+    weights = normalize_pass_weights(None, 3, device=torch.device("cpu"), dtype=torch.float32)
     torch.testing.assert_close(weights, torch.full((3,), 1 / 3))

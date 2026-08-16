@@ -16,9 +16,7 @@ from tiny_mistral_mptt.variants.multipass import MultiPassVariant
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Evaluate NLL and hidden-state stability across recurrent pass depth."
-    )
+    parser = argparse.ArgumentParser(description="Evaluate NLL and hidden-state stability across recurrent pass depth.")
     parser.add_argument("--config", required=True)
     parser.add_argument("--checkpoint", default=None)
     parser.add_argument("--passes", type=int, default=None)
@@ -38,16 +36,12 @@ def main() -> None:
         prefix_mixin_probability=cfg.prefix_mixin_probability,
     )
     if not isinstance(model, MultiPassVariant):
-        raise SystemExit(
-            "eval_pass_depth requires variant=fbt or variant=memory_tape32"
-        )
+        raise SystemExit("eval_pass_depth requires a multipass variant")
     if args.checkpoint:
         payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
         expected = file_sha256(f"{cfg.data_dir}/manifest.json")
         if payload.get("data_manifest_sha256") != expected:
-            raise RuntimeError(
-                "checkpoint was trained against a different data manifest"
-            )
+            raise RuntimeError("checkpoint was trained against a different data manifest")
         model.load_state_dict(payload["model"], strict=True)
     dataset = PackedTokenDataset(cfg.data_dir, "validation")
     passes = cfg.eval_passes if args.passes is None else args.passes

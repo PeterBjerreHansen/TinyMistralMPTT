@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-import math
 from dataclasses import asdict, dataclass
+import math
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-SUPPORTED_VARIANTS = {"vanilla", "fbt", "memory_tape32"}
+
+SUPPORTED_VARIANTS = {"vanilla", "fbt", "memory_add", "memory_tape32"}
 SUPPORTED_LR_SCHEDULES = {"constant", "cosine", "piecewise_linear"}
 SUPPORTED_FBT_INITIALIZATIONS = {"default", "calibrated"}
 
@@ -30,9 +31,7 @@ def _coerce_pass_probabilities(raw: Any) -> dict[int, float]:
     total = sum(result.values())
     if total <= 0:
         raise ValueError("pass probabilities must contain positive mass")
-    return {
-        passes: probability / total for passes, probability in sorted(result.items())
-    }
+    return {passes: probability / total for passes, probability in sorted(result.items())}
 
 
 def normalize_pass_schedule(raw: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -52,7 +51,7 @@ def normalize_pass_schedule(raw: list[dict[str, Any]] | None) -> list[dict[str, 
     previous_until = 0
     for index, stage in enumerate(raw):
         if not isinstance(stage, dict):
-            raise TypeError("each pass_schedule stage must be a mapping")
+            raise ValueError("each pass_schedule stage must be a mapping")
         unknown = sorted(set(stage) - {"until_tokens", "probabilities"})
         if unknown:
             raise ValueError(f"unknown pass_schedule stage fields: {unknown}")
@@ -79,7 +78,7 @@ def validate_lr_schedule(raw: dict[str, Any] | None) -> None:
     if raw is None:
         return
     if not isinstance(raw, dict):
-        raise TypeError("lr_schedule must be a mapping")
+        raise ValueError("lr_schedule must be a mapping")
     schedule_type = str(raw.get("type", "cosine"))
     if schedule_type not in SUPPORTED_LR_SCHEDULES:
         raise ValueError(f"unsupported lr_schedule type {schedule_type!r}")
@@ -95,9 +94,7 @@ def validate_lr_schedule(raw: dict[str, Any] | None) -> None:
         warmup = int(raw.get("warmup_tokens", 0))
         minimum = float(raw.get("min_multiplier", 0.1))
         if warmup < 0 or not 0 <= minimum <= 1:
-            raise ValueError(
-                "cosine schedule requires warmup_tokens>=0 and min_multiplier in [0,1]"
-            )
+            raise ValueError("cosine schedule requires warmup_tokens>=0 and min_multiplier in [0,1]")
         return
     unknown = sorted(set(raw) - {"type", "points"})
     if unknown:
@@ -108,18 +105,12 @@ def validate_lr_schedule(raw: dict[str, Any] | None) -> None:
     last_token = -1
     for point in points:
         if not isinstance(point, (list, tuple)) or len(point) != 2:
-            raise ValueError(
-                "piecewise_linear points must be [tokens, multiplier] pairs"
-            )
+            raise ValueError("piecewise_linear points must be [tokens, multiplier] pairs")
         tokens, multiplier = int(point[0]), float(point[1])
         if tokens < 0 or tokens <= last_token:
-            raise ValueError(
-                "piecewise_linear token coordinates must increase from >=0"
-            )
+            raise ValueError("piecewise_linear token coordinates must increase from >=0")
         if not math.isfinite(multiplier) or multiplier < 0:
-            raise ValueError(
-                "piecewise_linear multipliers must be finite and non-negative"
-            )
+            raise ValueError("piecewise_linear multipliers must be finite and non-negative")
         last_token = tokens
 
 
@@ -175,25 +166,15 @@ class ExperimentConfig:
 
     @property
     def pretrained_lr(self) -> float:
-        return (
-            self.learning_rate
-            if self.pretrained_learning_rate is None
-            else float(self.pretrained_learning_rate)
-        )
+        return self.learning_rate if self.pretrained_learning_rate is None else float(self.pretrained_learning_rate)
 
     @property
     def added_lr(self) -> float:
-        return (
-            self.learning_rate
-            if self.added_learning_rate is None
-            else float(self.added_learning_rate)
-        )
+        return self.learning_rate if self.added_learning_rate is None else float(self.added_learning_rate)
 
     def validate(self) -> None:
         if self.variant not in SUPPORTED_VARIANTS:
-            raise ValueError(
-                f"variant must be one of {sorted(SUPPORTED_VARIANTS)}; got {self.variant!r}"
-            )
+            raise ValueError(f"variant must be one of {sorted(SUPPORTED_VARIANTS)}; got {self.variant!r}")
         if self.phase not in {"A", "B"}:
             raise ValueError("phase must be 'A' or 'B'")
         if self.resume_from and self.init_from:
@@ -208,9 +189,7 @@ class ExperimentConfig:
             ("pretrained_learning_rate", self.pretrained_learning_rate),
             ("added_learning_rate", self.added_learning_rate),
         ):
-            if value is not None and (
-                not math.isfinite(float(value)) or float(value) < 0
-            ):
+            if value is not None and (not math.isfinite(float(value)) or float(value) < 0):
                 raise ValueError(f"{name} must be finite and non-negative")
         if not 0.0 <= self.min_lr_ratio <= 1.0:
             raise ValueError("min_lr_ratio must be in [0, 1]")
@@ -255,9 +234,7 @@ class ExperimentConfig:
             raise ValueError("fbt_gate_logit_std_target must be finite and positive")
 
         schedule = self.normalized_pass_schedule()
-        pass_counts = {
-            passes for stage in schedule for passes in stage["probabilities"]
-        }
+        pass_counts = {passes for stage in schedule for passes in stage["probabilities"]}
         if self.variant == "vanilla" and pass_counts != {1}:
             raise ValueError("vanilla supports only one-pass training")
         if self.variant == "vanilla" and self.eval_passes != 1:
@@ -265,9 +242,7 @@ class ExperimentConfig:
         if self.phase == "A" and self.variant == "vanilla":
             raise ValueError("vanilla has no Phase-A parameters")
         if self.phase == "A" and any(passes < 2 for passes in pass_counts):
-            raise ValueError(
-                "Phase A for multipass variants requires at least two passes on every batch"
-            )
+            raise ValueError("Phase A for multipass variants requires at least two passes on every batch")
         if self.pass_loss_weights is not None:
             if not self.pass_loss_weights:
                 raise ValueError("pass_loss_weights must not be empty")
@@ -278,7 +253,7 @@ class ExperimentConfig:
                 raise ValueError("pass_loss_weights must contain positive mass")
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> ExperimentConfig:
+    def from_dict(cls, raw: dict[str, Any]) -> "ExperimentConfig":
         known = set(cls.__dataclass_fields__)
         unknown = sorted(set(raw) - known)
         if unknown:
@@ -295,5 +270,5 @@ def load_experiment_config(path: str | Path) -> ExperimentConfig:
     with Path(path).open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
     if not isinstance(raw, dict):
-        raise TypeError("experiment config must be a YAML mapping")
+        raise ValueError("experiment config must be a YAML mapping")
     return ExperimentConfig.from_dict(raw)

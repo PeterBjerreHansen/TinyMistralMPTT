@@ -2,14 +2,14 @@ from .checkpoint import TrainState, load_checkpoint, load_model_weights, save_ch
 from .phases import PhasePlan, configure_phase, vanilla_phase_a_is_noop
 
 __all__ = [
-    "PhasePlan",
     "TrainState",
-    "Trainer",
-    "configure_phase",
     "load_checkpoint",
     "load_model_weights",
     "save_checkpoint",
+    "PhasePlan",
+    "configure_phase",
     "vanilla_phase_a_is_noop",
+    "Trainer",
 ]
 
 

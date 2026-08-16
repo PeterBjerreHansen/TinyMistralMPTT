@@ -7,7 +7,7 @@ from torch import nn
 
 from tiny_mistral.modeling import MistralForCausalLM
 
-from .multipass import MultiPassVariant
+from .multipass import MultiPassVariant, shift_previous_hidden
 
 
 class FBTVariant(MultiPassVariant):
@@ -45,12 +45,8 @@ class FBTVariant(MultiPassVariant):
 
     @staticmethod
     def shift_previous(previous_hidden: torch.Tensor) -> torch.Tensor:
-        if previous_hidden.ndim != 3:
-            raise ValueError("previous_hidden must be [B,T,D]")
-        shifted = torch.zeros_like(previous_hidden)
-        if previous_hidden.shape[1] > 1:
-            shifted[:, 1:, :] = previous_hidden[:, :-1, :]
-        return shifted
+        """Backward-compatible FBT alias for the shared causal shift helper."""
+        return shift_previous_hidden(previous_hidden)
 
     def feedback_inputs(
         self,
@@ -61,7 +57,7 @@ class FBTVariant(MultiPassVariant):
             raise ValueError(
                 "token_embeddings and previous_hidden must have identical [B,T,D] shape"
             )
-        shifted = self.shift_previous(previous_hidden)
+        shifted = shift_previous_hidden(previous_hidden)
         fused = self.feedback_value(shifted) * torch.sigmoid(
             self.feedback_gate(token_embeddings)
         )
@@ -107,7 +103,7 @@ class FBTVariant(MultiPassVariant):
         with torch.no_grad():
             token_embeddings = self.backbone.model.embed_tokens(input_ids)
             previous_hidden = self._run_first_hidden(input_ids)
-            shifted = self.shift_previous(previous_hidden)
+            shifted = shift_previous_hidden(previous_hidden)
             value = self.feedback_value(shifted)
             gate_logits = self.feedback_gate(token_embeddings)
 

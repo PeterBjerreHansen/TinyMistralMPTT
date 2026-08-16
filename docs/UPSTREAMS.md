@@ -32,8 +32,16 @@ pass-count, Phase-A, and Phase-B schedules remain explicitly configurable.
 
 - previous-pass top-layer memory semantics;
 - strict one-token shift / recurrent causality;
+- the MemoryAdd idea of injecting previous-pass state as an additive input
+  residual;
 - per-layer MemoryTape cross-attention;
 - flexible right-aligned pass-loss weighting.
+
+The current `memory_add` control deliberately differs from the older standalone
+`MemoryAddTransformer` in one respect: it reuses the previous final top-layer
+hidden state directly instead of learning a separate memory-write projection.
+That choice keeps its recurrent bandwidth aligned with FBT and isolates the
+reader/fusion mechanism for the TinyMistral retrofit experiment.
 
 The TinyMistral implementations are written against the new repository's own
 Mistral/GQA/local-attention interfaces rather than importing the old package.
@@ -42,7 +50,7 @@ Mistral/GQA/local-attention interfaces rather than importing the old package.
 
 `PeterBjerreHansen/chunked-mptt-core` is **not part of the current model phase**.
 No chunked-memory layout, memory token, writer, cache, or hybrid semantics should
-be inferred from the present FBT/MemoryTape32 implementation.
+be inferred from the present FBT/MemoryAdd/MemoryTape32 implementation.
 
 ## Training data
 

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import math
-from collections import defaultdict
 from dataclasses import dataclass
+import math
+from pathlib import Path
+from collections import defaultdict
 
 import torch
 import torch.nn.functional as F
@@ -75,10 +76,7 @@ def evaluate_pass_depth(
                 nll_sums[pass_index] += value
                 source_nll[pass_index][source_id] += value
             for transition in range(1, passes):
-                delta = (
-                    outputs.passes[transition].hidden_states
-                    - outputs.passes[transition - 1].hidden_states
-                )
+                delta = outputs.passes[transition].hidden_states - outputs.passes[transition - 1].hidden_states
                 delta_sq_sums[transition - 1] += float(delta.float().pow(2).sum().cpu())
                 delta_counts[transition - 1] += delta.numel()
     finally:
@@ -90,8 +88,7 @@ def evaluate_pass_depth(
     for pass_index in range(passes):
         by_source.append(
             {
-                id_to_name[source_id]: source_nll[pass_index][source_id]
-                / source_tokens[source_id]
+                id_to_name[source_id]: source_nll[pass_index][source_id] / source_tokens[source_id]
                 for source_id in sorted(source_tokens)
             }
         )
@@ -102,8 +99,7 @@ def evaluate_pass_depth(
         nll_by_pass=nll,
         perplexity_by_pass=tuple(math.exp(min(value, 50.0)) for value in nll),
         hidden_delta_rms=tuple(
-            math.sqrt(total / count)
-            for total, count in zip(delta_sq_sums, delta_counts, strict=True)
+            math.sqrt(total / count) for total, count in zip(delta_sq_sums, delta_counts, strict=True)
         ),
         nll_by_source_by_pass=tuple(by_source),
     )
