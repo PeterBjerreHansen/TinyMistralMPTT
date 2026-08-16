@@ -9,6 +9,15 @@ from typing import Any
 import torch
 
 
+_DEFAULT_EXPERIMENT_FIELDS = {
+    "prefix_mixin_probability": 0.0,
+    "fbt_initialization": "default",
+    "fbt_calibration_split": "validation",
+    "fbt_calibration_block": 0,
+    "fbt_gate_logit_std_target": 1.0,
+}
+
+
 @dataclass
 class TrainState:
     optimizer_steps: int = 0
@@ -67,8 +76,15 @@ def save_checkpoint(
 
 def _resume_config_view(config: dict) -> dict:
     # These fields identify where/how a resume is invoked, not the trajectory.
-    ignored = {"output_dir", "resume_from"}
-    return {key: value for key, value in config.items() if key not in ignored}
+    # ``max_unique_tokens`` is a stopping budget, so allowing it to increase is
+    # what makes an exact frozen-phase continuation possible.
+    ignored = {"output_dir", "resume_from", "max_unique_tokens"}
+    result = {
+        key: value for key, value in config.items() if key not in ignored
+    }
+    for key, default in _DEFAULT_EXPERIMENT_FIELDS.items():
+        result.setdefault(key, default)
+    return result
 
 
 def load_model_weights(path: str | Path, *, model: torch.nn.Module) -> dict[str, Any]:

@@ -1,0 +1,30 @@
+variant: memory_tape32
+phase: A
+model_dir: checkpoints/TinyMistral-248M-v3
+data_dir: data/dolmino/dev_512
+output_dir: runs/mac-memory-tape32-frozen-wired-v1
+device: mps
+dtype: float32
+attention_backend: auto
+seed: 1337
+architecture_seed: 4242
+memory_window: 32
+batch_size: 1
+grad_accum_steps: 4
+max_unique_tokens: 1048576
+learning_rate: 1.0e-6
+added_learning_rate: 1.0e-5
+lr_schedule:
+  type: constant
+weight_decay: 0.01
+grad_clip: 1.0
+pass_schedule:
+  - probabilities:
+      2: 1.0
+pass_loss_weights: [0.0, 1.0]
+eval_every_tokens: 65536
+eval_batches: 16
+eval_passes: 2
+checkpoint_every_tokens: 131072
+resume_from: runs/mac-memory-tape32-phase-a/latest.pt
+init_from: null

@@ -69,6 +69,72 @@ def test_checkpoint_rejects_training_config_changes(tmp_path):
         )
 
 
+def test_checkpoint_resume_allows_extending_token_budget(tmp_path):
+    model = torch.nn.Linear(2, 2)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, foreach=False)
+    sampler = StatefulBlockSampler(5, seed=3)
+    path = save_checkpoint(
+        tmp_path / "extend.pt",
+        model=model,
+        optimizer=optimizer,
+        sampler_state=sampler.state_dict(),
+        train_state=TrainState(unique_tokens_seen=4),
+        experiment_config={
+            "variant": "vanilla",
+            "max_unique_tokens": 4,
+            "output_dir": "a",
+            "resume_from": None,
+        },
+        data_manifest_sha256="same",
+    )
+    replacement = torch.nn.Linear(2, 2)
+    replacement_optimizer = torch.optim.AdamW(replacement.parameters(), lr=1e-3, foreach=False)
+    state, _ = load_checkpoint(
+        path,
+        model=replacement,
+        optimizer=replacement_optimizer,
+        expected_manifest_sha256="same",
+        expected_experiment_config={
+            "variant": "vanilla",
+            "max_unique_tokens": 8,
+            "output_dir": "extended",
+            "resume_from": str(path),
+        },
+    )
+    assert state.unique_tokens_seen == 4
+
+
+def test_checkpoint_resume_accepts_new_default_experiment_fields(tmp_path):
+    model = torch.nn.Linear(2, 2)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, foreach=False)
+    sampler = StatefulBlockSampler(5, seed=3)
+    path = save_checkpoint(
+        tmp_path / "defaults.pt",
+        model=model,
+        optimizer=optimizer,
+        sampler_state=sampler.state_dict(),
+        train_state=TrainState(),
+        experiment_config={"variant": "memory_tape32"},
+        data_manifest_sha256="same",
+    )
+    replacement = torch.nn.Linear(2, 2)
+    replacement_optimizer = torch.optim.AdamW(replacement.parameters(), lr=1e-3, foreach=False)
+    load_checkpoint(
+        path,
+        model=replacement,
+        optimizer=replacement_optimizer,
+        expected_manifest_sha256="same",
+        expected_experiment_config={
+            "variant": "memory_tape32",
+            "prefix_mixin_probability": 0.0,
+            "fbt_initialization": "default",
+            "fbt_calibration_split": "validation",
+            "fbt_calibration_block": 0,
+            "fbt_gate_logit_std_target": 1.0,
+        },
+    )
+
+
 def test_version1_checkpoint_allows_new_default_config_fields(tmp_path):
     model = torch.nn.Linear(2, 2)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, foreach=False)
