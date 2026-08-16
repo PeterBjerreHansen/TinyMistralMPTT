@@ -34,9 +34,12 @@ class MultiPassVariant(ExperimentalVariant):
     TinyMistral backbone.
     """
 
-    def __init__(self, backbone: MistralForCausalLM):
+    def __init__(self, backbone: MistralForCausalLM, *, prefix_mixin_probability: float = 0.0):
         super().__init__()
         self.backbone = backbone
+        if not 0.0 <= float(prefix_mixin_probability) <= 1.0:
+            raise ValueError("prefix_mixin_probability must be in [0, 1]")
+        self.prefix_mixin_probability = float(prefix_mixin_probability)
 
     @property
     def config(self):
@@ -55,6 +58,32 @@ class MultiPassVariant(ExperimentalVariant):
         previous_hidden: torch.Tensor,
     ) -> torch.Tensor:
         raise NotImplementedError
+
+    def apply_prefix_mixin(
+        self,
+        token_embeddings: torch.Tensor,
+        feedback_inputs: torch.Tensor,
+    ) -> torch.Tensor:
+        """Optionally keep a sampled prefix on the plain embedding path.
+
+        The random draws intentionally use the CPU generator. Checkpoints
+        already capture that generator state, while MPS does not expose a
+        corresponding state in this project. This keeps exact resume behavior
+        intact when prefix mixing is enabled.
+        """
+        if token_embeddings.shape != feedback_inputs.shape:
+            raise ValueError("token_embeddings and feedback_inputs must have identical shapes")
+        probability = self.prefix_mixin_probability
+        if probability <= 0.0 or feedback_inputs.shape[1] <= 1:
+            return feedback_inputs
+        should_mix = probability >= 1.0 or float(torch.rand((), device="cpu")) < probability
+        if not should_mix:
+            return feedback_inputs
+        prefix_length = int(torch.randint(1, feedback_inputs.shape[1] + 1, (), device="cpu").item())
+        return torch.cat(
+            (token_embeddings[:, :prefix_length, :], feedback_inputs[:, prefix_length:, :]),
+            dim=1,
+        )
 
     def _run_hidden_passes(
         self,

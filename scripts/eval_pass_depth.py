@@ -33,6 +33,7 @@ def main() -> None:
         attention_backend=cfg.attention_backend,
         architecture_seed=cfg.architecture_seed,
         memory_window=cfg.memory_window,
+        prefix_mixin_probability=cfg.prefix_mixin_probability,
     )
     if not isinstance(model, MultiPassVariant):
         raise SystemExit("eval_pass_depth requires variant=fbt or variant=memory_tape32")

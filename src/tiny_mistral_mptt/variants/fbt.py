@@ -21,8 +21,14 @@ class FBTVariant(MultiPassVariant):
 
     variant_name = "fbt"
 
-    def __init__(self, backbone: MistralForCausalLM, *, initialization_seed: int = 4242):
-        super().__init__(backbone)
+    def __init__(
+        self,
+        backbone: MistralForCausalLM,
+        *,
+        initialization_seed: int = 4242,
+        prefix_mixin_probability: float = 0.0,
+    ):
+        super().__init__(backbone, prefix_mixin_probability=prefix_mixin_probability)
         hidden_size = int(backbone.config.hidden_size)
         with torch.random.fork_rng(devices=[]):
             torch.manual_seed(int(initialization_seed))
@@ -58,7 +64,8 @@ class FBTVariant(MultiPassVariant):
             return token_embeddings
         # Position zero has no previous-token feedback state. Concatenation
         # avoids an in-place overwrite on an autograd-tracked tensor.
-        return torch.cat((token_embeddings[:, :1, :], fused[:, 1:, :]), dim=1)
+        feedback = torch.cat((token_embeddings[:, :1, :], fused[:, 1:, :]), dim=1)
+        return self.apply_prefix_mixin(token_embeddings, feedback)
 
     def _run_feedback_hidden(
         self,

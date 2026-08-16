@@ -16,11 +16,16 @@ def build_variant(
     *,
     architecture_seed: int = 4242,
     memory_window: int = 32,
+    prefix_mixin_probability: float = 0.0,
 ) -> ExperimentalVariant:
     if name == "vanilla":
         variant: ExperimentalVariant = VanillaVariant(backbone)
     elif name == "fbt":
-        variant = FBTVariant(backbone, initialization_seed=architecture_seed)
+        variant = FBTVariant(
+            backbone,
+            initialization_seed=architecture_seed,
+            prefix_mixin_probability=prefix_mixin_probability,
+        )
     elif name == "memory_tape32":
         variant = MemoryTape32Variant(
             backbone,
@@ -47,6 +52,7 @@ def load_variant(
     compile_flex: bool = True,
     architecture_seed: int = 4242,
     memory_window: int = 32,
+    prefix_mixin_probability: float = 0.0,
 ) -> ExperimentalVariant:
     backbone = load_model(
         model_dir,
@@ -60,4 +66,5 @@ def load_variant(
         backbone,
         architecture_seed=architecture_seed,
         memory_window=memory_window,
+        prefix_mixin_probability=prefix_mixin_probability,
     )

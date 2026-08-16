@@ -149,6 +149,7 @@ class ExperimentConfig:
     pass_schedule: list[dict[str, Any]] | None = None
     pass_loss_weights: list[float] | None = None
     memory_window: int = 32
+    prefix_mixin_probability: float = 0.0
 
     # ``resume_from`` restores the exact run. ``init_from`` loads model weights
     # only and begins a fresh trajectory/optimizer/data schedule.
@@ -200,6 +201,13 @@ class ExperimentConfig:
             raise ValueError("checkpoint_every_tokens must be non-negative")
         if self.memory_window <= 0:
             raise ValueError("memory_window must be positive")
+        if (
+            not math.isfinite(float(self.prefix_mixin_probability))
+            or not 0.0 <= float(self.prefix_mixin_probability) <= 1.0
+        ):
+            raise ValueError("prefix_mixin_probability must be finite and in [0, 1]")
+        if self.variant != "fbt" and self.prefix_mixin_probability != 0.0:
+            raise ValueError("prefix_mixin_probability is currently supported only for variant=fbt")
 
         schedule = self.normalized_pass_schedule()
         pass_counts = {passes for stage in schedule for passes in stage["probabilities"]}

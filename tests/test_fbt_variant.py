@@ -56,3 +56,26 @@ def test_fbt_phase_b_later_pass_loss_backpropagates_through_previous_pass():
     output.loss.backward()
     assert variant.backbone.model.embed_tokens.weight.grad is not None
     assert torch.isfinite(variant.backbone.model.embed_tokens.weight.grad).all()
+
+
+def test_fbt_prefix_mixin_reverts_a_checkpoint_reproducible_prefix():
+    variant = make_variant()
+    variant.prefix_mixin_probability = 1.0
+    dim = variant.config.hidden_size
+    embeddings = torch.randn(1, 5, dim)
+    previous = torch.randn(1, 5, dim)
+    with torch.no_grad():
+        variant.feedback_value.weight.copy_(torch.eye(dim))
+        variant.feedback_gate.weight.zero_()
+        shifted = variant.shift_previous(previous)
+        raw = torch.cat(
+            (embeddings[:, :1, :], 0.5 * shifted[:, 1:, :]),
+            dim=1,
+        )
+
+    torch.manual_seed(99)
+    expected_prefix = int(torch.randint(1, embeddings.shape[1] + 1, (), device="cpu").item())
+    torch.manual_seed(99)
+    mixed = variant.feedback_inputs(embeddings, previous)
+    torch.testing.assert_close(mixed[:, :expected_prefix, :], embeddings[:, :expected_prefix, :])
+    torch.testing.assert_close(mixed[:, expected_prefix:, :], raw[:, expected_prefix:, :])

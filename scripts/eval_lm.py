@@ -33,7 +33,9 @@ def main() -> None:
     device = resolve_device(cfg.device)
     model = load_variant(
         cfg.variant, cfg.model_dir, device=device, dtype=cfg.dtype, attention_backend=cfg.attention_backend,
-        architecture_seed=cfg.architecture_seed, memory_window=cfg.memory_window
+        architecture_seed=cfg.architecture_seed,
+        memory_window=cfg.memory_window,
+        prefix_mixin_probability=cfg.prefix_mixin_probability,
     )
     if args.checkpoint:
         payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)

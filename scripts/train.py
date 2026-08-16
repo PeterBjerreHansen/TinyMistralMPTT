@@ -15,6 +15,7 @@ def main() -> None:
     parser.add_argument("--config", required=True)
     parser.add_argument("--resume-from", default=None, help="exactly resume optimizer/RNG/data/pass-scheduler state")
     parser.add_argument("--init-from", default=None, help="load model weights only and begin a fresh run")
+    parser.add_argument("--until-unique-tokens", type=int, default=None)
     args = parser.parse_args()
     cfg = load_experiment_config(args.config)
     if args.resume_from is not None:
@@ -31,6 +32,7 @@ def main() -> None:
         attention_backend=cfg.attention_backend,
         architecture_seed=cfg.architecture_seed,
         memory_window=cfg.memory_window,
+        prefix_mixin_probability=cfg.prefix_mixin_probability,
     )
     train_data = PackedTokenDataset(cfg.data_dir, "train")
     validation_data = PackedTokenDataset(cfg.data_dir, "validation")
@@ -41,7 +43,7 @@ def main() -> None:
         validation_data=validation_data,
         device=device,
     )
-    state = trainer.train()
+    state = trainer.train(until_unique_tokens=args.until_unique_tokens)
     print(
         "PASS: training completed "
         f"phase={state.phase} steps={state.optimizer_steps} "
