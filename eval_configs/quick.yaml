@@ -1,0 +1,8 @@
+# Small sanity battery. Use --limit 100 while developing.
+tasks:
+  - {name: arc_easy, num_fewshot: 5}
+  - {name: arc_challenge, num_fewshot: 5}
+  - {name: boolq, num_fewshot: 5}
+  - {name: piqa, num_fewshot: 5}
+  - {name: winogrande, num_fewshot: 5}
+  - {name: openbookqa, num_fewshot: 5}

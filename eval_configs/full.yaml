@@ -1,0 +1,12 @@
+# Mirrors the main 5-shot base-model task set reported by Full-bandwidth Transformer.
+tasks:
+  - {name: rte, num_fewshot: 5}
+  - {name: truthfulqa_mc2, num_fewshot: 5}
+  - {name: arc_easy, num_fewshot: 5}
+  - {name: arc_challenge, num_fewshot: 5}
+  - {name: boolq, num_fewshot: 5}
+  - {name: piqa, num_fewshot: 5}
+  - {name: winogrande, num_fewshot: 5}
+  - {name: openbookqa, num_fewshot: 5}
+  - {name: copa, num_fewshot: 5}
+  - {name: mmlu, num_fewshot: 5}
