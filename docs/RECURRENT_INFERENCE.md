@@ -90,7 +90,7 @@ Example:
 
 ```bash
 uv run python scripts/eval_recurrent.py \
-  --config configs/mac/memory_add_phase_b.yaml \
+  --config <experiment-config.yaml> \
   --checkpoint <checkpoint.pt> \
   --prefill-passes 1 2 3 4 8 \
   --prompt-tokens 256 \
@@ -108,10 +108,9 @@ For each K the JSON output includes cumulative NLL at requested horizons,
 per-offset NLL, recurrent-minus-exact and recurrent-minus-vanilla gaps, and
 final-hidden RMS/cosine drift after each processed suffix token.
 
-For a 256-token prompt and 256-token suffix, useful first runs are the K=2
-checkpoints actually trained in the current experiments. Sweeping other K values
-is an inference-depth diagnostic, not evidence that those depths were optimized
-during training.
+For a 256-token prompt and 256-token suffix, `prefill_passes` may be swept
+independently of training K. Training depth and inference depth are separate
+experimental variables; the experiment record must state both.
 
 ## MemoryTape32 cached reader
 

@@ -1,4 +1,4 @@
-.PHONY: test compile offline-check download verify hf-check hf-layers hf-embeds mps-smoke prepare-dev verify-data train-mac eval-nll eval-quick mac-gates
+.PHONY: test compile offline-check download verify hf-check hf-layers hf-embeds mps-smoke prepare-dev verify-data eval-dev-nll eval-quick mac-gates
 
 test:
 	uv run pytest -q
@@ -32,14 +32,11 @@ prepare-dev:
 verify-data:
 	uv run python scripts/verify_data.py data/dolmino/dev_512
 
-train-mac:
-	uv run python scripts/train.py --config configs/mac/vanilla.yaml
-
-eval-nll:
-	uv run python scripts/eval_nll.py --config configs/mac/vanilla.yaml
+eval-dev-nll:
+	uv run python scripts/eval_nll.py --config configs/substrate/mac/vanilla.yaml
 
 eval-quick:
-	uv run python scripts/eval_lm.py --config configs/mac/vanilla.yaml --suite eval_configs/quick.yaml --limit 100
+	uv run python scripts/eval_lm.py --config configs/substrate/mac/vanilla.yaml --suite eval_configs/quick.yaml --limit 100
 
 # Assumes the checkpoint and development data artifact have already been prepared.
-mac-gates: test verify hf-check hf-layers hf-embeds mps-smoke verify-data eval-nll
+mac-gates: test verify hf-check hf-layers hf-embeds mps-smoke verify-data eval-dev-nll

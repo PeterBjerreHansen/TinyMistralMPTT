@@ -1,3 +1,8 @@
+> **Record status.** This file preserves the LR-development campaign and the
+> decisions made at the time. It is Stage 2 protocol-development evidence, not
+> the current locked main protocol. The authoritative lock status is
+> `../../main/LOCKED_PROTOCOL.md`.
+
 # Memory Phase-B dose-response
 
 This document records the controlled co-adaptation experiment requested after

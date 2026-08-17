@@ -1,3 +1,6 @@
+> **Stage 1 selected-starting-point evidence.** The authoritative checkpoint
+> identities and hashes are also recorded in `STARTING_POINTS.yaml`.
+
 # Frozen wired benchmark
 
 This is the immutable Phase-A reference for the first joint co-adaptation
