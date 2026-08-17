@@ -34,3 +34,41 @@ def test_multipass_variants_forward_backward_on_mps(variant_name):
     grads = [parameter.grad for parameter in model.added_parameters() if parameter.grad is not None]
     assert grads
     assert all(bool(torch.isfinite(grad).all().item()) for grad in grads)
+
+
+@pytest.mark.parametrize("variant_name", ["memory_add", "memory_tape32"])
+@pytest.mark.parametrize("passes", [2, 3])
+def test_incremental_memory_inference_on_mps(variant_name, passes):
+    from tiny_mistral_mptt.inference import (
+        exact_decode_step,
+        prefill_exact,
+        recurrent_decode_step,
+        recurrent_from_exact,
+    )
+
+    config = micro_config(sliding_window=4)
+    backbone = MistralForCausalLM(
+        config, attention_backend="auto"
+    ).to("mps", dtype=torch.float32)
+    if variant_name == "memory_add":
+        model = MemoryAddVariant(backbone)
+        with torch.no_grad():
+            model.memory_projection.weight.copy_(
+                0.05 * torch.eye(config.hidden_size, device="mps")
+            )
+    else:
+        model = MemoryTape32Variant(
+            backbone, memory_window=3, initialization_seed=17
+        )
+    model = model.to("mps", dtype=torch.float32).eval()
+    ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]], device="mps")
+
+    exact = prefill_exact(model, ids[:, :5], passes=passes)
+    recurrent = recurrent_from_exact(exact)
+    for position in (5, 6):
+        token = ids[:, position : position + 1]
+        exact = exact_decode_step(model, exact, token)
+        recurrent = recurrent_decode_step(model, recurrent, token)
+        assert bool(torch.isfinite(exact.next_token_logits).all().item())
+        assert bool(torch.isfinite(recurrent.next_token_logits).all().item())
+        assert exact.next_position == recurrent.next_position == position + 1

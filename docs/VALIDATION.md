@@ -1,8 +1,9 @@
 # Validation record
 
-This document separates the already validated vanilla substrate, the multipass
-experiments already exercised on the target Mac, and the new MemoryAdd code that
-still requires its first full Mac Phase-A run.
+This document separates the validated vanilla substrate, the finite-pass memory
+experiments already exercised on the target Mac, and the K-general cached
+recurrent-inference code whose CPU/reference oracle tests are complete and whose
+new MPS inference tests remain to be exercised on Apple hardware.
 
 ## Vanilla Mac acceptance (2026-08-16)
 
@@ -53,7 +54,8 @@ zeroed memory:             2.6645
 mismatched memory:         2.6430
 ```
 
-This is the current strongest finite-pass retrofit result in the repository.
+This was the first successful MemoryTape32 wiring result; the later mature
+frozen and Phase-B comparisons are recorded below.
 
 ### FBT
 
@@ -71,87 +73,120 @@ fused-input RMS to token-embedding RMS and set gate-logit standard deviation to
 pass-3+ training. FBT remains a valid implemented comparison, but it is not the
 current reference for recurrent-system development.
 
-## Offline acceptance after adding MemoryAdd
+## Mature MemoryAdd / MemoryTape32 Mac results
 
-The implementation host is Linux/CPU and has no MPS/CUDA runtime. The complete
-offline suite after adding MemoryAdd passes:
+Both memory architectures completed frozen-backbone wiring to 1,048,576 tokens,
+followed by a controlled Phase-B backbone-LR dose response and matched
+one-million-token joint/frozen continuations. The full results and checkpoint provenance are in
+`MEMORY_WIRED_BENCHMARK.md` and `MEMORY_PHASE_B_DOSE_RESPONSE.md`.
+
+At the final joint checkpoints (pretrained LR `1e-7`, added LR `1e-6`, K=2),
+full 256-block validation was:
 
 ```text
-99 passed, 4 skipped
+MemoryAdd:     pass 1 2.6394, pass 2 2.5541, pass 8 2.5638
+MemoryTape32:  pass 1 2.6426, pass 2 2.5432, pass 8 2.5473
 ```
 
-All four skips are MPS hardware-only: the inherited MPS smoke plus one MPS
-forward/backward case each for FBT, MemoryAdd, and MemoryTape32.
+Matched frozen controls ended at pass-2 NLL `2.5675` and `2.5515`, respectively.
+Final real/zero/mismatched interventions remained causal-memory-sensitive:
 
-Coverage includes all previous vanilla/FBT/MemoryTape32 tests plus the following
-MemoryAdd-specific contracts:
+```text
+MemoryAdd joint:     real 2.5541, zero 2.6394, mismatch 2.6705
+MemoryTape32 joint:  real 2.5432, zero 2.6426, mismatch 2.6190
+```
 
-- one-pass exact vanilla parity;
-- zero-initialized passes 1-4 are all exactly vanilla;
-- strict one-token previous-pass alignment with an exact zero residual at
-  position zero;
-- shared causal shift semantics with FBT;
-- zero previous state remains an exact vanilla input path even after the reader
-  projection changes;
-- Phase A freezes the full pretrained backbone while the zero-initialized
-  memory projection receives a finite nonzero gradient;
-- Phase B allows gradients into the pretrained backbone;
-- MemoryAdd construction does not advance the global PyTorch RNG;
-- factory/config registration and dtype propagation;
-- strict state-dict roundtrip of added parameters;
-- full shared-trainer Phase-A smoke with correct unique/token-equivalent compute
-  accounting and unchanged pretrained weights;
-- MPS forward/backward coverage is present and will run automatically on Apple
-  hardware.
+The backbone relative L2 movement from the mature wired checkpoints was about
+`1.47e-4` for MemoryAdd and `1.41e-4` for MemoryTape32. No K=3/multi-depth
+training was introduced.
 
-Compilation also passes with:
+## K-general cached/recurrent inference acceptance
+
+The new inference implementation was validated on the Linux/CPU implementation
+host with:
+
+```text
+126 passed, 8 skipped
+```
+
+The eight skips are MPS-only tests because Apple hardware is unavailable on the
+implementation host. Compilation also passes with:
 
 ```bash
 python -m compileall -q src scripts tests
 ```
 
-## Required Mac gate for MemoryAdd
+New oracle/contract coverage includes:
 
-Before starting MemoryAdd Phase B, run:
+- exact cached incremental inference versus full finite-pass recomputation for
+  MemoryAdd and MemoryTape32 at K in `{1,2,3,4}`;
+- continuation beyond the TinyMistral self-attention sliding window, exercising
+  absolute cache positions and W-1 retained self-attention keys;
+- K=1 exact/recurrent equivalence to ordinary vanilla cached inference;
+- K>1 recurrent seeding from pass K-1 and exact equality through the first
+  processed continuation token;
+- snapshot-before-update K-stream semantics, preventing same-position feedback
+  leakage;
+- MemoryAdd's one-vector recurrent state;
+- MemoryTape32's bounded, ordered strict-past ring and cached memory-bank GQA
+  reader;
+- `memory_bank_attention` against a dense GQA reference and against the final
+  query of the existing full-sequence strict-past local reader;
+- teacher-forced recurrent evaluator K=1 identity and K=2 delayed-onset drift
+  semantics;
+- MPS smoke cases for MemoryAdd and MemoryTape32 at K=2 and K=3, including
+  exact and recurrent cached decode.
+
+The public multipass `generate()` method remains intentionally vanilla. The new
+recurrent path is explicit through `tiny_mistral_mptt.inference` and
+`scripts/eval_recurrent.py`.
+
+The applied overlay was then validated in this target Mac checkout with:
+
+```text
+134 passed
+26/26 Mac configs parsed
+compileall: PASS
+git diff --check: PASS
+```
+
+The first teacher-forced K=2 smoke evaluations also completed for both final
+joint checkpoints using 2 validation blocks, a 16-token prompt, and a
+16-token continuation. They reported exact, recurrent, and vanilla NLLs plus
+hidden-state RMS/cosine drift. The full 256-block/256-token command remains a
+separate target-hardware gate because it was impractically slow on this MPS
+setup; it was stopped without changing any repository or checkpoint state.
+
+### Required Mac inference gate
+
+Before interpreting target-hardware recurrent results, run:
 
 ```bash
 uv run pytest -q
 
-uv run python scripts/train.py \
-  --config configs/mac/memory_add_phase_a.yaml
+uv run python scripts/eval_recurrent.py \
+  --config configs/mac/memory_add_phase_b_selected_lr1e-7_long.yaml \
+  --checkpoint runs/mac-memory-add-phase-b-selected-lr1e-7-long/latest.pt \
+  --prefill-passes 2 \
+  --prompt-tokens 256 \
+  --continuation-tokens 256
 
-uv run python scripts/eval_pass_depth.py \
-  --config configs/mac/memory_add_phase_a.yaml \
-  --checkpoint runs/mac-memory-add-phase-a/latest.pt \
-  --passes 8
-
-uv run python scripts/eval_memory_interventions.py \
-  --config configs/mac/memory_add_phase_a.yaml \
-  --checkpoint runs/mac-memory-add-phase-a/latest.pt
+uv run python scripts/eval_recurrent.py \
+  --config configs/mac/memory_tape32_phase_b_selected_lr1e-7_long.yaml \
+  --checkpoint runs/mac-memory-tape32-phase-b-selected-lr1e-7-long/latest.pt \
+  --prefill-passes 2 \
+  --prompt-tokens 256 \
+  --continuation-tokens 256
 ```
 
-The acceptance questions are deliberately scientific rather than merely
-operational:
-
-1. Does pass 1 stay at the vanilla NLL?
-2. Does pass 2 improve materially below vanilla under a frozen backbone?
-3. Does real previous state beat both zero and mismatched state?
-4. Do passes 3-8 remain finite and reasonably stable?
-5. Is the learned memory residual nontrivial relative to the token embedding,
-   rather than remaining effectively bypassed?
-
-Only if these gates are healthy should the checked-in conservative Phase-B
-starting point be run:
-
-```bash
-uv run python scripts/train.py \
-  --config configs/mac/memory_add_phase_b.yaml
-```
+K=2 is the first scientific evaluation because those checkpoints were trained
+with fixed K=2. The evaluator may then sweep other positive prefill depths
+without changing code.
 
 ## CUDA gate
 
 No CUDA efficiency claim is validated in this phase. Before a rented-GPU run,
 benchmark vanilla, MemoryAdd, FBT, and MemoryTape32 at the intended context
 length and record peak memory, tokens/sec, parameter count, and effective pass
-count. Recurrent decoding is intentionally still deferred until the finite-pass
-MemoryAdd gate has been inspected.
+count. Free-running recurrent generation remains deferred until the explicit
+teacher-forced exact-vs-recurrent gate has been inspected on target hardware.

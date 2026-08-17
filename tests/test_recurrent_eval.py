@@ -1,0 +1,84 @@
+import torch
+
+from conftest import micro_config
+from tiny_mistral.modeling import MistralForCausalLM
+from tiny_mistral_mptt.evaluation.recurrent import evaluate_recurrent_continuation
+from tiny_mistral_mptt.variants.memory_add import MemoryAddVariant
+
+
+class TinyDataset:
+    def __init__(self):
+        self.rows = torch.tensor(
+            [
+                [1, 7, 3, 14, 22, 9, 31, 4, 51, 12],
+                [2, 5, 8, 11, 17, 23, 29, 35, 41, 47],
+            ]
+        )
+        self.sequence_length = int(self.rows.shape[1])
+
+    def __len__(self):
+        return int(self.rows.shape[0])
+
+    def batch(self, indices, *, device):
+        return self.rows[indices].to(device)
+
+
+def make_model():
+    torch.manual_seed(444)
+    backbone = MistralForCausalLM(
+        micro_config(sliding_window=4), attention_backend="reference"
+    )
+    model = MemoryAddVariant(backbone).eval()
+    with torch.no_grad():
+        model.memory_projection.weight.copy_(
+            0.05 * torch.eye(model.config.hidden_size)
+        )
+    return model
+
+
+def test_recurrent_eval_k1_is_identical_to_vanilla_at_every_offset():
+    result = evaluate_recurrent_continuation(
+        make_model(),
+        TinyDataset(),
+        device="cpu",
+        prefill_passes=1,
+        prompt_tokens=4,
+        continuation_tokens=6,
+        horizons=[1, 2, 6],
+    )
+    assert result.prefill_passes == 1
+    assert result.predicted_tokens_per_mode == 12
+    torch.testing.assert_close(
+        torch.tensor(result.exact_nll_by_offset),
+        torch.tensor(result.recurrent_nll_by_offset),
+        atol=0,
+        rtol=0,
+    )
+    torch.testing.assert_close(
+        torch.tensor(result.exact_nll_by_offset),
+        torch.tensor(result.vanilla_nll_by_offset),
+        atol=0,
+        rtol=0,
+    )
+    assert result.hidden_delta_rms_by_step == (0.0,) * 6
+    assert all(abs(value - 1.0) < 1e-7 for value in result.hidden_cosine_by_step)
+
+
+def test_recurrent_eval_k2_has_exact_initial_handoff_then_measures_drift():
+    result = evaluate_recurrent_continuation(
+        make_model(),
+        TinyDataset(),
+        device="cpu",
+        prefill_passes=2,
+        prompt_tokens=4,
+        continuation_tokens=6,
+        horizons=[1, 2, 4, 6],
+    )
+    # Prefill predicts offset 0 identically; after consuming offset 0 the
+    # recurrent and exact states are still identical, so offset 1 is identical
+    # as well.  The feedback source differs when offset 1 itself is processed.
+    assert abs(result.exact_nll_by_offset[0] - result.recurrent_nll_by_offset[0]) < 1e-7
+    assert abs(result.exact_nll_by_offset[1] - result.recurrent_nll_by_offset[1]) < 1e-7
+    assert result.hidden_delta_rms_by_step[0] < 1e-6
+    assert max(result.hidden_delta_rms_by_step[1:]) > 1e-5
+    assert [item.horizon for item in result.horizons] == [1, 2, 4, 6]

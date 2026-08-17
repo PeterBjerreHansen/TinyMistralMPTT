@@ -9,8 +9,16 @@ def dense_reference(query, key, value, window):
     bsz, hq, seq_len, dim = query.shape
     hkv = key.shape[1]
     groups = hq // hkv
-    key = key[:, :, None, :, :].expand(bsz, hkv, groups, seq_len, dim).reshape(bsz, hq, seq_len, dim)
-    value = value[:, :, None, :, :].expand(bsz, hkv, groups, seq_len, dim).reshape(bsz, hq, seq_len, dim)
+    key = (
+        key[:, :, None, :, :]
+        .expand(bsz, hkv, groups, seq_len, dim)
+        .reshape(bsz, hq, seq_len, dim)
+    )
+    value = (
+        value[:, :, None, :, :]
+        .expand(bsz, hkv, groups, seq_len, dim)
+        .reshape(bsz, hq, seq_len, dim)
+    )
     scores = query @ key.transpose(-2, -1) / math.sqrt(dim)
     q = torch.arange(seq_len)[:, None]
     k = torch.arange(seq_len)[None, :]
@@ -19,7 +27,11 @@ def dense_reference(query, key, value, window):
     probs = torch.softmax(scores, dim=-1)
     probs = probs * allowed[None, None]
     denom = probs.sum(-1, keepdim=True)
-    probs = torch.where(denom > 0, probs / denom.clamp_min(torch.finfo(probs.dtype).tiny), torch.zeros_like(probs))
+    probs = torch.where(
+        denom > 0,
+        probs / denom.clamp_min(torch.finfo(probs.dtype).tiny),
+        torch.zeros_like(probs),
+    )
     return probs @ value
 
 
@@ -47,3 +59,62 @@ def test_memory_attention_ignores_current_future_and_too_old_memory():
     changed[:, :, 6:] -= 1000  # current/future
     perturbed = strict_past_local_attention(q, k, changed, window=3)
     torch.testing.assert_close(perturbed[:, :, 6], baseline[:, :, 6], atol=0, rtol=0)
+
+
+def dense_bank_reference(query, key, value):
+    bsz, hq, query_len, dim = query.shape
+    hkv = key.shape[1]
+    memory_len = key.shape[-2]
+    if memory_len == 0:
+        return torch.zeros_like(query)
+    groups = hq // hkv
+    key = (
+        key[:, :, None, :, :]
+        .expand(bsz, hkv, groups, memory_len, dim)
+        .reshape(bsz, hq, memory_len, dim)
+    )
+    value = (
+        value[:, :, None, :, :]
+        .expand(bsz, hkv, groups, memory_len, dim)
+        .reshape(bsz, hq, memory_len, dim)
+    )
+    scores = query @ key.transpose(-2, -1) / math.sqrt(dim)
+    return torch.softmax(scores, dim=-1) @ value
+
+
+def test_memory_bank_attention_matches_dense_gqa_reference():
+    from tiny_mistral_mptt.attention.memory_local import memory_bank_attention
+
+    torch.manual_seed(6)
+    q = torch.randn(2, 4, 3, 8)
+    k = torch.randn(2, 2, 5, 8)
+    v = torch.randn(2, 2, 5, 8)
+    actual = memory_bank_attention(q, k, v)
+    expected = dense_bank_reference(q, k, v)
+    torch.testing.assert_close(actual, expected, atol=1e-6, rtol=1e-6)
+
+
+def test_memory_bank_attention_matches_strict_past_last_query():
+    from tiny_mistral_mptt.attention.memory_local import memory_bank_attention
+
+    torch.manual_seed(7)
+    q = torch.randn(1, 4, 9, 8)
+    k = torch.randn(1, 2, 9, 8)
+    v = torch.randn(1, 2, 9, 8)
+    strict = strict_past_local_attention(q, k, v, window=4)
+    bank = memory_bank_attention(
+        q[:, :, -1:, :],
+        k[:, :, -5:-1, :],
+        v[:, :, -5:-1, :],
+    )
+    torch.testing.assert_close(bank[:, :, 0], strict[:, :, -1], atol=1e-6, rtol=1e-6)
+
+
+def test_memory_bank_attention_empty_bank_is_exact_zero():
+    from tiny_mistral_mptt.attention.memory_local import memory_bank_attention
+
+    q = torch.randn(2, 4, 1, 8)
+    k = torch.empty(2, 2, 0, 8)
+    v = torch.empty(2, 2, 0, 8)
+    actual = memory_bank_attention(q, k, v)
+    torch.testing.assert_close(actual, torch.zeros_like(q), atol=0, rtol=0)

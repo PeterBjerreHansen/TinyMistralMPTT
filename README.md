@@ -147,9 +147,9 @@ uv run python scripts/eval_memory_interventions.py \
 ```
 
 The intervention evaluator compares real, zeroed, and mismatched previous states
-and reports the MemoryAdd residual/embedding RMS ratio. Phase B is checked in as
-a conservative next-stage config but should only be run after the Phase-A depth
-and intervention gates are inspected.
+and reports the MemoryAdd residual/embedding RMS ratio. The frozen-wiring and
+controlled Phase-B experiments are preserved in
+`docs/MEMORY_WIRED_BENCHMARK.md` and `docs/MEMORY_PHASE_B_DOSE_RESPONSE.md`.
 
 ## 7. MemoryTape32 wiring and adaptation
 
@@ -236,13 +236,38 @@ transition.
 vanilla semantics** by default. This is deliberate: ordinary model calls still
 mean the standard TinyMistral model.
 
-`eval_pass_depth.py` is the current multipass research evaluator. It reports
+`eval_pass_depth.py` is the finite-pass research evaluator. It reports
 NLL/perplexity at every requested pass, per-source NLL at every pass, and RMS
 changes in top-layer hidden states between successive passes.
 
-Online recurrent generation for FBT, MemoryAdd, and MemoryTape32 is intentionally deferred
-until their finite-pass training behavior has been validated. The current
-`generate()` method on multipass wrappers delegates to vanilla generation.
+MemoryAdd and MemoryTape32 additionally expose a **K-general incremental
+inference substrate**. `prefill_passes=K` is an inference-time hyperparameter;
+it is not tied to the current K=2 training protocol. Two modes are available:
+
+- `exact_incremental`: retain K independent TinyMistral KV streams and reproduce
+  finite K-pass recomputation with K cached token steps per continuation token;
+- `recurrent`: perform the same K-pass prompt prefill, keep only the final-pass
+  KV cache plus pass-(K-1) feedback memory, then close the feedback loop and use
+  one cached token step per continuation token.
+
+K=1 is an exact vanilla boundary case in both modes. For K>1, the first
+processed continuation token in recurrent mode is exact because its feedback
+state is seeded from pass K-1; approximation begins only after the loop closes.
+The teacher-forced evaluator accepts any positive K:
+
+```bash
+uv run python scripts/eval_recurrent.py \
+  --config configs/mac/memory_add_phase_b_selected_lr1e-7_long.yaml \
+  --checkpoint runs/mac-memory-add-phase-b-selected-lr1e-7-long/latest.pt \
+  --prefill-passes 1 2 3 4 \
+  --prompt-tokens 256 \
+  --continuation-tokens 256
+```
+
+It reports exact-K, recurrent-K, and pass-1 NLL by continuation horizon together
+with hidden-state drift. See `docs/RECURRENT_INFERENCE.md` for the state and
+causality contracts. Public `generate()` deliberately remains vanilla so
+existing lm-eval/model-call semantics do not change silently.
 
 ## 11. External benchmark battery
 
@@ -266,7 +291,8 @@ src/tiny_mistral_mptt/attention/    research-only local memory attention
 src/tiny_mistral_mptt/data/         Dolmino materialization/mmap dataset
 src/tiny_mistral_mptt/training/     phases, pass/LR schedules, checkpointing
 src/tiny_mistral_mptt/variants/     vanilla, FBT, MemoryAdd, MemoryTape32
-src/tiny_mistral_mptt/evaluation/   one-pass NLL, pass-depth, lm-eval adapter
+src/tiny_mistral_mptt/evaluation/   NLL, pass-depth, recurrent, lm-eval adapter
+src/tiny_mistral_mptt/inference/    K-general exact/recurrent cached inference
 configs/                            data/Mac/GPU experiment configs
 eval_configs/                       external benchmark suites
 docs/                               protocol, data, provenance, validation

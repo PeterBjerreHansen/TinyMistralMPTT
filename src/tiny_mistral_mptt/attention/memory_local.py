@@ -85,3 +85,54 @@ def strict_past_local_attention(
     output = torch.matmul(probs_for_mm, value_windows)  # [B,Hkv,T,G,D]
     output = output.permute(0, 1, 3, 2, 4).contiguous()
     return output.reshape(bsz, hq, seq_len, head_dim)
+
+
+def memory_bank_attention(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    *,
+    dropout_p: float = 0.0,
+    training: bool = False,
+) -> torch.Tensor:
+    """GQA attention from arbitrary queries into an already-strict-past bank.
+
+    Unlike :func:`strict_past_local_attention`, the memory positions supplied
+    here are *already known* to precede every query position.  This is the
+    cached-decoding primitive used by MemoryTape32: a one-token query attends
+    to the retained tail of the previous stream without introducing a
+    same-position key.
+
+    Shapes are ``query=[B,Hq,Q,D]`` and ``key=value=[B,Hkv,M,D]``.  ``M`` may
+    be zero, in which case the result is an exact zero tensor.
+    """
+    if query.ndim != 4 or key.ndim != 4 or value.ndim != 4:
+        raise ValueError("query/key/value must be [B,H,T,D]")
+    if key.shape != value.shape:
+        raise ValueError("key and value shapes must match")
+    if query.shape[0] != key.shape[0] or query.shape[-1] != key.shape[-1]:
+        raise ValueError("query/key batch and head dimensions must align")
+    if query.shape[1] % key.shape[1] != 0:
+        raise ValueError("query head count must be divisible by KV head count")
+    if not 0.0 <= dropout_p < 1.0:
+        raise ValueError("dropout_p must be in [0,1)")
+
+    bsz, hq, query_len, head_dim = query.shape
+    hkv = key.shape[1]
+    memory_len = key.shape[-2]
+    if memory_len == 0:
+        return torch.zeros_like(query)
+
+    groups = hq // hkv
+    grouped_query = query.reshape(bsz, hkv, groups, query_len, head_dim)
+    grouped_key = key[:, :, None, :, :]  # [B,Hkv,1,M,D]
+    grouped_value = value[:, :, None, :, :]  # [B,Hkv,1,M,D]
+    scores = torch.matmul(grouped_query, grouped_key.transpose(-2, -1))
+    scores = scores / math.sqrt(head_dim)  # [B,Hkv,G,Q,M]
+
+    probabilities = F.softmax(scores, dim=-1, dtype=torch.float32).to(query.dtype)
+    if dropout_p:
+        probabilities = F.dropout(probabilities, p=dropout_p, training=training)
+
+    output = torch.matmul(probabilities, grouped_value)  # [B,Hkv,G,Q,D]
+    return output.contiguous().reshape(bsz, hq, query_len, head_dim)

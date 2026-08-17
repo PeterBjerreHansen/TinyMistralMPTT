@@ -1,4 +1,4 @@
-.PHONY: test compile download verify hf-check hf-layers hf-embeds mps-smoke prepare-dev verify-data train-mac eval-nll eval-quick offline-check mac-gates fbt-a fbt-b memory-a memory-b memoryadd-a memoryadd-b fbt-depth memory-depth memoryadd-depth memoryadd-interventions
+.PHONY: test compile download verify hf-check hf-layers hf-embeds mps-smoke prepare-dev verify-data train-mac eval-nll eval-quick offline-check mac-gates fbt-a fbt-b memory-a memory-b memoryadd-a memoryadd-b fbt-depth memory-depth memoryadd-depth memoryadd-interventions recurrent-eval
 
 test:
 	uv run pytest -q
@@ -73,3 +73,6 @@ eval-quick:
 
 # Assumes the checkpoint and development data artifact have already been prepared.
 mac-gates: test verify hf-check hf-layers hf-embeds mps-smoke verify-data eval-nll
+
+recurrent-eval:
+	uv run python scripts/eval_recurrent.py --config configs/mac/memory_add_phase_b_selected_lr1e-7_long.yaml --checkpoint runs/mac-memory-add-phase-b-selected-lr1e-7-long/latest.pt --prefill-passes 2 --prompt-tokens 256 --continuation-tokens 256

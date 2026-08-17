@@ -1,0 +1,227 @@
+import pytest
+import torch
+
+from conftest import micro_config
+from tiny_mistral.modeling import MistralForCausalLM
+from tiny_mistral_mptt.inference import (
+    exact_decode_step,
+    prefill_exact,
+    prefill_recurrent,
+    recurrent_decode_step,
+)
+from tiny_mistral_mptt.variants.memory_add import MemoryAddVariant
+from tiny_mistral_mptt.variants.memory_tape32 import MemoryTape32Variant
+
+
+def make_variant(name: str):
+    torch.manual_seed(123)
+    backbone = MistralForCausalLM(
+        micro_config(num_hidden_layers=2, sliding_window=4),
+        attention_backend="reference",
+    )
+    if name == "memory_add":
+        model = MemoryAddVariant(backbone)
+        with torch.no_grad():
+            dim = model.config.hidden_size
+            model.memory_projection.weight.copy_(0.05 * torch.eye(dim))
+    elif name == "memory_tape32":
+        model = MemoryTape32Variant(
+            backbone,
+            memory_window=3,
+            initialization_seed=987,
+        )
+    else:
+        raise AssertionError(name)
+    return model.eval()
+
+
+def sample_ids():
+    return torch.tensor([[1, 7, 3, 14, 22, 9, 31, 4, 51, 12, 6, 44, 18]])
+
+
+@pytest.mark.parametrize("variant_name", ["memory_add", "memory_tape32"])
+@pytest.mark.parametrize("passes", [1, 2, 3, 4])
+def test_exact_incremental_matches_full_recomputation_for_arbitrary_k(
+    variant_name, passes
+):
+    model = make_variant(variant_name)
+    ids = sample_ids()
+    prompt_length = 5
+
+    with torch.no_grad():
+        state = prefill_exact(model, ids[:, :prompt_length], passes=passes)
+        full = model.compute_passes(ids[:, :prompt_length], passes=passes)
+        torch.testing.assert_close(
+            state.next_token_logits,
+            full.final.logits[:, -1, :],
+            atol=3e-5,
+            rtol=3e-5,
+        )
+        for stream, output in zip(state.streams, full.passes, strict=True):
+            torch.testing.assert_close(
+                stream.last_hidden,
+                output.hidden_states[:, -1:, :],
+                atol=3e-5,
+                rtol=3e-5,
+            )
+
+        # Continue past the SWA window so absolute cache positions and retained
+        # W-1 self-attention keys are exercised, not only short-prefix caching.
+        for position in range(prompt_length, ids.shape[1]):
+            state = exact_decode_step(model, state, ids[:, position : position + 1])
+            full = model.compute_passes(ids[:, : position + 1], passes=passes)
+            assert state.next_position == position + 1
+            torch.testing.assert_close(
+                state.next_token_logits,
+                full.final.logits[:, -1, :],
+                atol=4e-5,
+                rtol=4e-5,
+            )
+            for stream, output in zip(state.streams, full.passes, strict=True):
+                torch.testing.assert_close(
+                    stream.last_hidden,
+                    output.hidden_states[:, -1:, :],
+                    atol=4e-5,
+                    rtol=4e-5,
+                )
+                for layer_cache in stream.past_key_values:
+                    assert layer_cache.seq_len <= model.config.sliding_window - 1
+
+
+@pytest.mark.parametrize("variant_name", ["memory_add", "memory_tape32"])
+@pytest.mark.parametrize("passes", [2, 3, 4])
+def test_recurrent_handoff_is_exact_for_first_processed_token(
+    variant_name, passes
+):
+    model = make_variant(variant_name)
+    ids = sample_ids()
+    prompt = ids[:, :6]
+    first_token = ids[:, 6:7]
+
+    with torch.no_grad():
+        exact = prefill_exact(model, prompt, passes=passes)
+        recurrent = prefill_recurrent(model, prompt, passes=passes)
+
+        torch.testing.assert_close(
+            recurrent.feedback_memory,
+            exact.streams[-2].feedback_memory,
+            atol=0,
+            rtol=0,
+        )
+        torch.testing.assert_close(
+            recurrent.next_token_logits, exact.next_token_logits, atol=0, rtol=0
+        )
+        torch.testing.assert_close(
+            recurrent.last_hidden, exact.last_hidden, atol=0, rtol=0
+        )
+
+        exact_after = exact_decode_step(model, exact, first_token)
+        recurrent_after = recurrent_decode_step(model, recurrent, first_token)
+        torch.testing.assert_close(
+            recurrent_after.next_token_logits,
+            exact_after.next_token_logits,
+            atol=4e-5,
+            rtol=4e-5,
+        )
+        torch.testing.assert_close(
+            recurrent_after.last_hidden,
+            exact_after.last_hidden,
+            atol=4e-5,
+            rtol=4e-5,
+        )
+        assert recurrent_after.next_position == exact_after.next_position == 7
+
+
+@pytest.mark.parametrize("variant_name", ["memory_add", "memory_tape32"])
+def test_k1_recurrent_and_exact_are_vanilla_cached_inference(variant_name):
+    model = make_variant(variant_name)
+    ids = sample_ids()
+    prompt = ids[:, :5]
+
+    with torch.no_grad():
+        vanilla = model.backbone.model(prompt, use_cache=True)
+        assert vanilla.past_key_values is not None
+        vanilla_logits = model.backbone.lm_head(
+            vanilla.last_hidden_state[:, -1:, :]
+        ).float()[:, -1, :]
+
+        exact = prefill_exact(model, prompt, passes=1)
+        recurrent = prefill_recurrent(model, prompt, passes=1)
+        assert recurrent.feedback_memory is None
+        torch.testing.assert_close(
+            exact.next_token_logits, vanilla_logits, atol=0, rtol=0
+        )
+        torch.testing.assert_close(
+            recurrent.next_token_logits, vanilla_logits, atol=0, rtol=0
+        )
+
+        vanilla_cache = vanilla.past_key_values
+        for position in range(5, ids.shape[1]):
+            token = ids[:, position : position + 1]
+            vanilla_step = model.backbone.model(
+                token, past_key_values=vanilla_cache, use_cache=True
+            )
+            assert vanilla_step.past_key_values is not None
+            vanilla_cache = vanilla_step.past_key_values
+            vanilla_logits = model.backbone.lm_head(
+                vanilla_step.last_hidden_state
+            ).float()[:, -1, :]
+
+            exact = exact_decode_step(model, exact, token)
+            recurrent = recurrent_decode_step(model, recurrent, token)
+            torch.testing.assert_close(
+                exact.next_token_logits, vanilla_logits, atol=0, rtol=0
+            )
+            torch.testing.assert_close(
+                recurrent.next_token_logits, vanilla_logits, atol=0, rtol=0
+            )
+
+
+def test_memory_tape_recurrent_ring_is_bounded_ordered_and_seeded_from_k_minus_1():
+    model = make_variant("memory_tape32")
+    ids = sample_ids()
+    prompt = ids[:, :7]
+
+    with torch.no_grad():
+        exact = prefill_exact(model, prompt, passes=3)
+        recurrent = prefill_recurrent(model, prompt, passes=3)
+        expected_seed = exact.streams[1].feedback_memory
+        assert expected_seed.shape[1] == model.memory_window
+        torch.testing.assert_close(
+            recurrent.feedback_memory, expected_seed, atol=0, rtol=0
+        )
+
+        old_memory = recurrent.feedback_memory.clone()
+        recurrent_after = recurrent_decode_step(model, recurrent, ids[:, 7:8])
+        assert recurrent.feedback_memory is not None
+        torch.testing.assert_close(recurrent.feedback_memory, old_memory, atol=0, rtol=0)
+        assert recurrent_after.feedback_memory is not None
+        assert recurrent_after.feedback_memory.shape[1] == model.memory_window
+        torch.testing.assert_close(
+            recurrent_after.feedback_memory[:, :-1, :],
+            old_memory[:, 1:, :],
+            atol=0,
+            rtol=0,
+        )
+        torch.testing.assert_close(
+            recurrent_after.feedback_memory[:, -1:, :],
+            recurrent_after.last_hidden,
+            atol=0,
+            rtol=0,
+        )
+
+
+def test_memory_add_recurrent_state_keeps_exactly_one_feedback_vector():
+    model = make_variant("memory_add")
+    ids = sample_ids()
+    with torch.no_grad():
+        state = prefill_recurrent(model, ids[:, :6], passes=4)
+        assert state.feedback_memory is not None
+        assert state.feedback_memory.shape[1] == 1
+        for position in range(6, 10):
+            state = recurrent_decode_step(model, state, ids[:, position : position + 1])
+            assert state.feedback_memory is not None
+            assert state.feedback_memory.shape[1] == 1
+            torch.testing.assert_close(
+                state.feedback_memory, state.last_hidden, atol=0, rtol=0
+            )

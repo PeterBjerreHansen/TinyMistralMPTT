@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import torch
 
-from tiny_mistral.modeling import MistralForCausalLM
+from tiny_mistral.modeling import LayerKVCache, MistralForCausalLM
 
 from ..training.loss import causal_lm_loss, normalize_pass_weights
 from .base import ExperimentalVariant, TrainOutput
@@ -70,12 +70,62 @@ class MultiPassVariant(ExperimentalVariant):
             input_ids=input_ids, use_cache=False
         ).last_hidden_state
 
+    def _run_first_hidden_cached(
+        self, input_ids: torch.Tensor
+    ) -> tuple[torch.Tensor, tuple[LayerKVCache, ...]]:
+        output = self.backbone.model(input_ids=input_ids, use_cache=True)
+        if output.past_key_values is None:
+            raise RuntimeError("cached first pass did not return KV state")
+        return output.last_hidden_state, output.past_key_values
+
+    def _run_first_token_cached(
+        self,
+        input_ids: torch.Tensor,
+        past_key_values: tuple[LayerKVCache, ...],
+    ) -> tuple[torch.Tensor, tuple[LayerKVCache, ...]]:
+        output = self.backbone.model(
+            input_ids=input_ids,
+            past_key_values=past_key_values,
+            use_cache=True,
+        )
+        if output.past_key_values is None:
+            raise RuntimeError("cached first-pass token did not return KV state")
+        return output.last_hidden_state, output.past_key_values
+
     def _run_feedback_hidden(
         self,
         input_ids: torch.Tensor,
         token_embeddings: torch.Tensor,
         previous_hidden: torch.Tensor,
     ) -> torch.Tensor:
+        raise NotImplementedError
+
+    def _run_feedback_hidden_cached(
+        self,
+        input_ids: torch.Tensor,
+        token_embeddings: torch.Tensor,
+        previous_hidden: torch.Tensor,
+    ) -> tuple[torch.Tensor, tuple[LayerKVCache, ...]]:
+        """Run a complete feedback pass while retaining its self-attention cache."""
+        raise NotImplementedError
+
+    def _run_feedback_token_cached(
+        self,
+        token_embedding: torch.Tensor,
+        feedback_memory: torch.Tensor,
+        past_key_values: tuple[LayerKVCache, ...],
+    ) -> tuple[torch.Tensor, tuple[LayerKVCache, ...]]:
+        """Process one token from an already-strict-past feedback memory."""
+        raise NotImplementedError
+
+    def _feedback_memory_from_hidden(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """Compress a stream history to the state needed by the next pass/token."""
+        raise NotImplementedError
+
+    def _append_feedback_memory(
+        self, feedback_memory: torch.Tensor, new_hidden: torch.Tensor
+    ) -> torch.Tensor:
+        """Append one newly produced stream state to its retained feedback memory."""
         raise NotImplementedError
 
     def apply_prefix_mixin(
