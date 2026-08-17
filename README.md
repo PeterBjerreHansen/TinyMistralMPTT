@@ -165,10 +165,12 @@ See `docs/RECURRENT_INFERENCE.md` for state, cache, and causality contracts.
 
 ## Experiment history
 
-Completed campaign artifacts are separated from the stable runnable surface:
+Completed campaign artifacts and active continuation provenance are separated from
+the mature baseline surface:
 
 - `experiments/memory_phase_b/`: mature frozen wiring, LR dose response, matched
-  controls, final Phase-B continuations, and their exact configs;
+  controls, completed Phase-B continuations, active K=3 source configs, and their
+  exact configs;
 - `experiments/fbt_retrofit/`: prefix-mixing/co-adaptation/calibrated-init
   investigations and FBT-specific diagnostics.
 

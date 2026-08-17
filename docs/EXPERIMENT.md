@@ -125,8 +125,10 @@ The scheduler has an independent RNG, sample counter, and pass histogram. Its
 state is checkpointed so interrupted/resumed training reproduces the same
 future pass-count draws.
 
-The canonical Mac wiring configs currently use fixed `K=2`. Mixed schedules
-remain an experimental knob, not a requirement or an implementation limit.
+The canonical Mac wiring configs use fixed `K=2` for the mature baseline. The
+new `K=3` short runs and their one-million-token continuations are active
+follow-up experiments, not merely historical records. Mixed schedules remain
+an experimental knob, not a requirement or an implementation limit.
 
 ## Phase A: wiring
 
@@ -288,9 +290,11 @@ The first useful run is intentionally modest:
 FBT Phase A             fixed K=2
 FBT Phase B             fixed K=2
 MemoryAdd Phase A       fixed K=2
-MemoryAdd Phase B       fixed K=2 (only after Phase-A gate)
+MemoryAdd Phase B       fixed K=2 mature baseline
+MemoryAdd Phase B K=3   short run, then one-million-token continuation
 MemoryTape32 Phase A    fixed K=2
-MemoryTape32 Phase B    fixed K=2
+MemoryTape32 Phase B    fixed K=2 mature baseline
+MemoryTape32 Phase B K=3 short run, then one-million-token continuation
 ```
 
 For each multipass model inspect:
@@ -305,7 +309,8 @@ For each multipass model inspect:
 
 The finite-pass wiring and conservative Phase-B gates have now been cleared for
 MemoryAdd and MemoryTape32. Detailed campaign results and exact sweep configs live
-under `experiments/memory_phase_b/`. Their next research gate is the exact-K versus
-collapsed-recurrent continuation experiment described above. K=3/multi-depth
-training should remain a response to measured recurrent drift rather than be
-introduced before that drift is characterized.
+under `experiments/memory_phase_b/`. The mature K=2 checkpoints remain the first
+interpretation target for recurrent inference; the active K=3 short runs extend
+that baseline and, if stable, continue to the one-million-token configs. Mixed or
+multi-depth training remains a later response to measured recurrent drift rather
+than an implicit change to these fixed-depth experiments.

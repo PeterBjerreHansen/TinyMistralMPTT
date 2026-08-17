@@ -85,7 +85,7 @@ The eight skips are MPS-only tests. The same source also passes:
 python -m compileall -q src scripts tests experiments
 ```
 
-All seven canonical `configs/mac/*.yaml` files parse and validate through
+All eleven canonical `configs/mac/*.yaml` files parse and validate through
 `ExperimentConfig`. Historical sweep configs are intentionally kept under
 `experiments/`; the calibrated-FBT YAML is marked historical because its one-off
 config fields were retired from the stable API.
