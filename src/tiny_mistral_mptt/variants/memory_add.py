@@ -27,6 +27,7 @@ class MemoryAddVariant(MultiPassVariant):
     """
 
     variant_name = "memory_add"
+    supports_cached_feedback = True
 
     def __init__(self, backbone: MistralForCausalLM):
         super().__init__(backbone)

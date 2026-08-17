@@ -2,7 +2,7 @@
 
 ## Vanilla backbone
 
-The vendored `src/tiny_mistral/` package is the vanilla TinyMistral reference
+The vendored `src/tiny_mistral/` package is the validated TinyMistral backbone
 implementation derived from:
 
 - repository: `PeterBjerreHansen/TinyMistralFork`

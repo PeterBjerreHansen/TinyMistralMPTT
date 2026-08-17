@@ -1,10 +1,10 @@
-.PHONY: test compile download verify hf-check hf-layers hf-embeds mps-smoke prepare-dev verify-data train-mac eval-nll eval-quick offline-check mac-gates fbt-a fbt-b memory-a memory-b memoryadd-a memoryadd-b fbt-depth memory-depth memoryadd-depth memoryadd-interventions recurrent-eval
+.PHONY: test compile offline-check download verify hf-check hf-layers hf-embeds mps-smoke prepare-dev verify-data train-mac eval-nll eval-quick mac-gates
 
 test:
 	uv run pytest -q
 
 compile:
-	uv run python -m compileall -q src scripts tests
+	uv run python -m compileall -q src scripts tests experiments
 
 offline-check: compile test
 
@@ -35,36 +35,6 @@ verify-data:
 train-mac:
 	uv run python scripts/train.py --config configs/mac/vanilla.yaml
 
-fbt-a:
-	uv run python scripts/train.py --config configs/mac/fbt_phase_a.yaml
-
-fbt-b:
-	uv run python scripts/train.py --config configs/mac/fbt_phase_b.yaml
-
-memory-a:
-	uv run python scripts/train.py --config configs/mac/memory_tape32_phase_a.yaml
-
-memory-b:
-	uv run python scripts/train.py --config configs/mac/memory_tape32_phase_b.yaml
-
-memoryadd-a:
-	uv run python scripts/train.py --config configs/mac/memory_add_phase_a.yaml
-
-memoryadd-b:
-	uv run python scripts/train.py --config configs/mac/memory_add_phase_b.yaml
-
-memoryadd-depth:
-	uv run python scripts/eval_pass_depth.py --config configs/mac/memory_add_phase_a.yaml --checkpoint runs/mac-memory-add-phase-a/latest.pt --passes 8
-
-memoryadd-interventions:
-	uv run python scripts/eval_memory_interventions.py --config configs/mac/memory_add_phase_a.yaml --checkpoint runs/mac-memory-add-phase-a/latest.pt
-
-fbt-depth:
-	uv run python scripts/eval_pass_depth.py --config configs/mac/fbt_phase_b.yaml --checkpoint runs/mac-fbt-phase-b/latest.pt --passes 8
-
-memory-depth:
-	uv run python scripts/eval_pass_depth.py --config configs/mac/memory_tape32_phase_b.yaml --checkpoint runs/mac-memory-tape32-phase-b/latest.pt --passes 8
-
 eval-nll:
 	uv run python scripts/eval_nll.py --config configs/mac/vanilla.yaml
 
@@ -73,6 +43,3 @@ eval-quick:
 
 # Assumes the checkpoint and development data artifact have already been prepared.
 mac-gates: test verify hf-check hf-layers hf-embeds mps-smoke verify-data eval-nll
-
-recurrent-eval:
-	uv run python scripts/eval_recurrent.py --config configs/mac/memory_add_phase_b_selected_lr1e-7_long.yaml --checkpoint runs/mac-memory-add-phase-b-selected-lr1e-7-long/latest.pt --prefill-passes 2 --prompt-tokens 256 --continuation-tokens 256

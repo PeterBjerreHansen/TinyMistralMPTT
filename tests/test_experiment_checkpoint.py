@@ -127,11 +127,39 @@ def test_checkpoint_resume_accepts_new_default_experiment_fields(tmp_path):
         expected_experiment_config={
             "variant": "memory_tape32",
             "prefix_mixin_probability": 0.0,
-            "fbt_initialization": "default",
+        },
+    )
+
+
+def test_checkpoint_resume_ignores_retired_fbt_calibration_metadata(tmp_path):
+    model = torch.nn.Linear(2, 2)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, foreach=False)
+    sampler = StatefulBlockSampler(5, seed=3)
+    path = save_checkpoint(
+        tmp_path / "legacy-calibration.pt",
+        model=model,
+        optimizer=optimizer,
+        sampler_state=sampler.state_dict(),
+        train_state=TrainState(),
+        experiment_config={
+            "variant": "fbt",
+            "fbt_initialization": "calibrated",
             "fbt_calibration_split": "validation",
             "fbt_calibration_block": 0,
             "fbt_gate_logit_std_target": 1.0,
         },
+        data_manifest_sha256="same",
+    )
+    replacement = torch.nn.Linear(2, 2)
+    replacement_optimizer = torch.optim.AdamW(
+        replacement.parameters(), lr=1e-3, foreach=False
+    )
+    load_checkpoint(
+        path,
+        model=replacement,
+        optimizer=replacement_optimizer,
+        expected_manifest_sha256="same",
+        expected_experiment_config={"variant": "fbt"},
     )
 
 

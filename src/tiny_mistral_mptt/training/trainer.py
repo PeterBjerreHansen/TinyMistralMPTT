@@ -100,7 +100,6 @@ class Trainer:
             "trainable_added_parameters": _parameter_count(trainable_added),
             "added_parameters_total": _parameter_count(model.added_parameters()),
             "initialization_provenance": initialization_provenance,
-            "initialization_stats": getattr(model, "initialization_stats", None),
         }
         (self.run_dir / "run.json").write_text(
             json.dumps(run_info, indent=2, sort_keys=True) + "\n", encoding="utf-8"

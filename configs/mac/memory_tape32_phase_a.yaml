@@ -11,7 +11,7 @@ architecture_seed: 4242
 memory_window: 32
 batch_size: 1
 grad_accum_steps: 4
-max_unique_tokens: 262144
+max_unique_tokens: 1048576
 learning_rate: 1.0e-6
 added_learning_rate: 1.0e-5
 lr_schedule:

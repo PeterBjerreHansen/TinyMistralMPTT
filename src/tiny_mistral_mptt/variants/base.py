@@ -34,10 +34,6 @@ class ExperimentalVariant(nn.Module):
         """Parameters absent from the validated vanilla backbone."""
         return ()
 
-    def pretrained_parameters(self) -> Iterable[nn.Parameter]:
-        added_ids = {id(parameter) for parameter in self.added_parameters()}
-        return (parameter for parameter in self.parameters() if id(parameter) not in added_ids)
-
     def set_phase(self, phase: str) -> None:
         if phase not in {"A", "B"}:
             raise ValueError("phase must be 'A' or 'B'")

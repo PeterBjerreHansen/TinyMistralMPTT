@@ -1,72 +1,61 @@
 # TinyMistralMPTT
 
-A self-contained research repository for retrofitting multi-pass latent-state
-mechanisms onto the validated `M4-ai/TinyMistral-248M-v3` backbone.
+Research code for retrofitting multi-pass latent-state mechanisms onto the
+validated `M4-ai/TinyMistral-248M-v3` backbone.
 
-The repository deliberately keeps `src/tiny_mistral/` as the vanilla reference
-implementation and places all research behavior under `src/tiny_mistral_mptt/`.
-The current comparison supports four first-class variants:
+The repository keeps the validated TinyMistral implementation under
+`src/tiny_mistral/` and places research behavior under
+`src/tiny_mistral_mptt/`. The current comparison has four first-class variants:
 
 - `vanilla`: exact one-pass TinyMistral control;
-- `fbt`: asymmetric-GLU latent feedback from the previous pass's immediately
-  preceding top-layer state;
-- `memory_add`: a zero-initialized additive residual from the previous pass's
-  immediately preceding top-layer state;
-- `memory_tape32`: per-layer GQA cross-attention to the previous pass's most
-  recent 32 strictly earlier top-layer states.
+- `fbt`: asymmetric-GLU feedback from the previous pass's immediately preceding
+  top-layer state;
+- `memory_add`: a zero-initialized additive residual from one preceding
+  top-layer state;
+- `memory_tape32`: per-layer GQA cross-attention to the previous pass's recent
+  strictly earlier top-layer states.
 
-No chunked-memory or hybrid model is implemented in this phase.
+No chunked-memory or hybrid architecture is implemented in this phase.
 
-## Scientific invariants
+## Scientific contracts
 
-For every multipass variant, **pass 1 is the vanilla model**. Newly initialized
-research modules are skipped entirely on pass 1. A one-pass FBT, MemoryAdd, or
-MemoryTape32 forward must therefore reproduce vanilla TinyMistral exactly.
-MemoryAdd is additionally zero-initialized so *all* pass depths reproduce vanilla
-exactly before training.
+For every multipass variant, **pass 1 is the vanilla model**. Research modules
+are bypassed entirely rather than merely gated to zero. MemoryAdd is additionally
+zero-initialized, so every pass depth is exactly vanilla before training.
 
-Training is intentionally configurable rather than tied to one paper-specific
-recipe:
+Training is K-general. Pass count is a configurable hyperparameter sampled from
+a token-indexed schedule, while per-pass losses use independently configurable,
+right-aligned non-negative weights. Phase A freezes the pretrained backbone;
+Phase B unfreezes it and uses independent learning rates for pretrained and
+architecture-added parameters.
 
-- pass counts are sampled from a token-indexed configurable schedule;
-- pass losses use configurable, right-aligned non-negative weights;
-- Phase A freezes the pretrained backbone and trains only added modules;
-- Phase B has independent base learning rates for pretrained and added
-  parameters, so the backbone may adapt slowly rather than being all-or-nothing
-  frozen;
-- LR multipliers may be constant, cosine, or piecewise-linear;
-- `init_from` loads model weights only for a fresh experimental stage;
-- `resume_from` restores the exact optimizer/data/RNG/pass-scheduler trajectory.
+`resume_from` restores an exact optimizer/data/RNG/pass-scheduler trajectory.
+`init_from` loads model weights only and starts a fresh training trajectory.
+See `docs/EXPERIMENT.md` for the complete contract.
 
-See `docs/EXPERIMENT.md` for the full protocol.
-
-## 1. Install and test
+## Install and validate
 
 ```bash
 uv sync --extra data --extra eval
 uv run pytest -q
 ```
 
-Python 3.13 is selected by `.python-version`. `uv.lock` is committed by the
-online development environment.
-
-## 2. Download and verify TinyMistral
+Download and verify the pinned TinyMistral checkpoint:
 
 ```bash
 uv run python scripts/download_checkpoint.py
 uv run python scripts/verify_checkpoint.py
-```
-
-Strong vanilla oracle checks remain available:
-
-```bash
 uv run python scripts/compare_hf.py --device cpu --dtype float32
 uv run python scripts/compare_hf_layers.py --device cpu --dtype float32
 uv run python scripts/compare_hf_inputs_embeds.py --length 40
-uv run python scripts/mps_smoke.py
 ```
 
-## 3. Materialize the Dolmino development artifact
+The vendored backbone is provenance-checked by `docs/VANILLA_SOURCE.sha256`.
+`docs/UPSTREAMS.md` records the exact source/checkpoint revisions and the single
+non-numerical dispatch hardening relative to the validated TinyMistralFork
+commit.
+
+## Development data
 
 ```bash
 uv run python scripts/prepare_data.py \
@@ -74,230 +63,134 @@ uv run python scripts/prepare_data.py \
 uv run python scripts/verify_data.py data/dolmino/dev_512
 ```
 
-The checked-in development config produces 1,048,576 training tokens and
-131,072 held-out tokens at sequence length 512 from the pinned published
-Dolmino 50B Stage-2 mixture. Data files are local artifacts and are not checked
-into git.
+The development recipe materializes 1,048,576 training tokens and 131,072 held-
+out tokens at sequence length 512 from a pinned Dolmino mixture. Generated data
+is local and ignored by git.
 
-## 4. Vanilla control
+## Core training workflow
+
+Vanilla control:
 
 ```bash
 uv run python scripts/train.py --config configs/mac/vanilla.yaml
-uv run python scripts/eval_nll.py --config configs/mac/vanilla.yaml
-uv run python scripts/eval_nll.py \
-  --config configs/mac/vanilla.yaml \
-  --checkpoint runs/mac-vanilla/latest.pt
 ```
 
-The vanilla model has no Phase A.
-
-## 5. FBT wiring and adaptation
-
-Phase A trains only the two added feedback projections with fixed two-pass
-training. The checked-in config is a **starting point, not a canonical
-objective**:
-
-```bash
-uv run python scripts/train.py --config configs/mac/fbt_phase_a.yaml
-```
-
-Phase B initializes from the Phase-A model weights, unfreezes the backbone, and
-uses separate pretrained/added learning rates:
-
-```bash
-uv run python scripts/train.py --config configs/mac/fbt_phase_b.yaml
-```
-
-Evaluate the recurrent pass map explicitly:
-
-```bash
-uv run python scripts/eval_pass_depth.py \
-  --config configs/mac/fbt_phase_b.yaml \
-  --checkpoint runs/mac-fbt-phase-b/latest.pt \
-  --passes 8
-```
-
-## 6. MemoryAdd one-state control
-
-MemoryAdd keeps the current token embedding on the normal pretrained path and
-adds a residual derived from the previous pass's immediately preceding top-layer
-state:
-
-```text
-x_t = e_t + W_M RMSNorm(h_(t-1)^(k-1))
-```
-
-`W_M` is zero-initialized. Consequently pass 2 (and deeper passes) are exact
-vanilla before training, making this a clean test of whether a single recurrent
-latent can learn a useful correction without replacing TinyMistral's input
-representation. Phase A freezes the backbone and trains only the added RMSNorm
-and projection.
+Frozen wiring:
 
 ```bash
 uv run python scripts/train.py --config configs/mac/memory_add_phase_a.yaml
+uv run python scripts/train.py --config configs/mac/memory_tape32_phase_a.yaml
+```
 
+The canonical memory Phase-A configs run to 1,048,576 frozen-backbone tokens,
+matching the mature wiring stage used in the controlled comparison.
+
+Start Phase B from an explicitly preserved wired checkpoint:
+
+```bash
+uv run python scripts/train.py \
+  --config configs/mac/memory_add_phase_b.yaml \
+  --init-from checkpoints/memory_add_frozen_wired_v1.pt
+
+uv run python scripts/train.py \
+  --config configs/mac/memory_tape32_phase_b.yaml \
+  --init-from checkpoints/memory_tape32_frozen_wired_v1.pt
+```
+
+The mainline Phase-B operating point is K=2, loss weights `[0.25, 0.75]`,
+pretrained LR `1e-7`, added LR `1e-6`, constant schedule. Pass depth remains a
+hyperparameter: this operating point is an experimental choice, not an API
+restriction.
+
+FBT remains available as a comparison:
+
+```bash
+uv run python scripts/train.py --config configs/mac/fbt_phase_a.yaml
+uv run python scripts/train.py \
+  --config configs/mac/fbt_phase_b.yaml \
+  --init-from runs/mac-fbt-phase-a/latest.pt
+```
+
+One-off FBT retrofit experiments are archived under `experiments/fbt_retrofit/`
+rather than exposed as stable training knobs.
+
+## Finite-pass evaluation
+
+```bash
 uv run python scripts/eval_pass_depth.py \
-  --config configs/mac/memory_add_phase_a.yaml \
-  --checkpoint runs/mac-memory-add-phase-a/latest.pt \
+  --config configs/mac/memory_add_phase_b.yaml \
+  --checkpoint <checkpoint.pt> \
   --passes 8
 
 uv run python scripts/eval_memory_interventions.py \
-  --config configs/mac/memory_add_phase_a.yaml \
-  --checkpoint runs/mac-memory-add-phase-a/latest.pt
+  --config configs/mac/memory_add_phase_b.yaml \
+  --checkpoint <checkpoint.pt>
 ```
 
-The intervention evaluator compares real, zeroed, and mismatched previous states
-and reports the MemoryAdd residual/embedding RMS ratio. The frozen-wiring and
-controlled Phase-B experiments are preserved in
-`docs/MEMORY_WIRED_BENCHMARK.md` and `docs/MEMORY_PHASE_B_DOSE_RESPONSE.md`.
+Pass-depth evaluation reports NLL/perplexity at every requested depth, per-source
+NLL, and hidden-state delta RMS. Memory interventions compare real, zeroed, and
+mismatched previous state; for MemoryAdd they also report recurrent-residual RMS
+relative to token-embedding RMS.
 
-## 7. MemoryTape32 wiring and adaptation
+## Cached exact and recurrent inference
 
-MemoryTape32 is an equal-status research variant, not scaffolding for another
-model. Each decoder layer reads the previous pass's top-layer memory tape via a
-strict-past local GQA reader with default window 32.
+MemoryAdd and MemoryTape32 implement explicit K-general cached inference under
+`tiny_mistral_mptt.inference`:
 
-```bash
-uv run python scripts/train.py \
-  --config configs/mac/memory_tape32_phase_a.yaml
+- `exact_incremental`: K independent TinyMistral KV streams, exactly matching
+  finite K-pass recomputation;
+- `recurrent`: the same K-pass prompt prefill, followed by one continuing final-
+  pass KV stream with recurrent feedback.
 
-uv run python scripts/train.py \
-  --config configs/mac/memory_tape32_phase_b.yaml
-```
+K=1 is an exact vanilla boundary case. For K>1, recurrent mode is seeded from
+pass K-1, so the first processed continuation token matches exact K-pass
+inference; approximation begins only after the feedback loop closes.
 
-Pass-depth evaluation:
-
-```bash
-uv run python scripts/eval_pass_depth.py \
-  --config configs/mac/memory_tape32_phase_b.yaml \
-  --checkpoint runs/mac-memory-tape32-phase-b/latest.pt \
-  --passes 8
-```
-
-## 8. Flexible objectives and schedules
-
-Pass supervision is independent of pass-count sampling. For example:
-
-```yaml
-pass_schedule:
-  - until_tokens: 2000000
-    probabilities:
-      2: 1.0
-  - probabilities:
-      1: 0.50
-      2: 0.45
-      3: 0.05
-
-pass_loss_weights: [0.05, 0.20, 0.75]
-```
-
-If a two-pass batch is sampled, the final two configured weights are used and
-renormalized. A one-pass batch always reduces to ordinary one-pass NTP.
-
-Phase-B parameter groups are independent:
-
-```yaml
-pretrained_learning_rate: 1.0e-7
-added_learning_rate: 1.0e-6
-lr_schedule:
-  type: cosine
-  warmup_tokens: 16384
-  min_multiplier: 0.1
-```
-
-A manual schedule is also supported:
-
-```yaml
-lr_schedule:
-  type: piecewise_linear
-  points:
-    - [0,        0.2]
-    - [100000,   1.0]
-    - [5000000,  1.0]
-    - [20000000, 0.1]
-```
-
-The multiplier is applied to both parameter groups while preserving their LR
-ratio.
-
-## 9. `init_from` versus `resume_from`
-
-`resume_from` means exact continuation. Model, optimizer, data sampler, Python
-and PyTorch RNG, pass-scheduler RNG/histogram, counters, and phase are restored.
-Trajectory-changing config edits are rejected.
-
-`init_from` loads only model parameters and starts a fresh run with new
-optimizer/scheduler/data counters. This is the intended Phase-A -> Phase-B
-transition.
-
-## 10. Evaluation boundary
-
-`eval_nll.py` and the existing `lm-evaluation-harness` adapter retain **one-pass
-vanilla semantics** by default. This is deliberate: ordinary model calls still
-mean the standard TinyMistral model.
-
-`eval_pass_depth.py` is the finite-pass research evaluator. It reports
-NLL/perplexity at every requested pass, per-source NLL at every pass, and RMS
-changes in top-layer hidden states between successive passes.
-
-MemoryAdd and MemoryTape32 additionally expose a **K-general incremental
-inference substrate**. `prefill_passes=K` is an inference-time hyperparameter;
-it is not tied to the current K=2 training protocol. Two modes are available:
-
-- `exact_incremental`: retain K independent TinyMistral KV streams and reproduce
-  finite K-pass recomputation with K cached token steps per continuation token;
-- `recurrent`: perform the same K-pass prompt prefill, keep only the final-pass
-  KV cache plus pass-(K-1) feedback memory, then close the feedback loop and use
-  one cached token step per continuation token.
-
-K=1 is an exact vanilla boundary case in both modes. For K>1, the first
-processed continuation token in recurrent mode is exact because its feedback
-state is seeded from pass K-1; approximation begins only after the loop closes.
-The teacher-forced evaluator accepts any positive K:
+Teacher-forced comparison:
 
 ```bash
 uv run python scripts/eval_recurrent.py \
-  --config configs/mac/memory_add_phase_b_selected_lr1e-7_long.yaml \
-  --checkpoint runs/mac-memory-add-phase-b-selected-lr1e-7-long/latest.pt \
+  --config configs/mac/memory_add_phase_b.yaml \
+  --checkpoint <checkpoint.pt> \
   --prefill-passes 1 2 3 4 \
   --prompt-tokens 256 \
   --continuation-tokens 256
 ```
 
-It reports exact-K, recurrent-K, and pass-1 NLL by continuation horizon together
-with hidden-state drift. See `docs/RECURRENT_INFERENCE.md` for the state and
-causality contracts. Public `generate()` deliberately remains vanilla so
-existing lm-eval/model-call semantics do not change silently.
+Public multipass `generate()` intentionally retains vanilla semantics. Recurrent
+behavior is opt-in through the explicit inference API. FBT does not currently
+implement cached feedback inference beyond the K=1 vanilla boundary.
 
-## 11. External benchmark battery
+See `docs/RECURRENT_INFERENCE.md` for state, cache, and causality contracts.
 
-The existing harness integration remains available for the one-pass control:
+## Experiment history
 
-```bash
-uv run python scripts/eval_lm.py \
-  --config configs/mac/vanilla.yaml \
-  --suite eval_configs/quick.yaml \
-  --limit 100
-```
+Completed campaign artifacts are separated from the stable runnable surface:
 
-The benchmark battery is secondary to held-out Dolmino NLL during the wiring
-stage.
+- `experiments/memory_phase_b/`: mature frozen wiring, LR dose response, matched
+  controls, final Phase-B continuations, and their exact configs;
+- `experiments/fbt_retrofit/`: prefix-mixing/co-adaptation/calibrated-init
+  investigations and FBT-specific diagnostics.
+
+This preserves reproducibility without turning `configs/mac/`, `scripts/`, or
+`src/` into an experiment ledger.
 
 ## Repository layout
 
 ```text
-src/tiny_mistral/                   frozen vanilla backbone
+src/tiny_mistral/                   validated vendored TinyMistral backbone
 src/tiny_mistral_mptt/attention/    research-only local memory attention
-src/tiny_mistral_mptt/data/         Dolmino materialization/mmap dataset
+src/tiny_mistral_mptt/data/         Dolmino materialization and packed dataset
 src/tiny_mistral_mptt/training/     phases, pass/LR schedules, checkpointing
 src/tiny_mistral_mptt/variants/     vanilla, FBT, MemoryAdd, MemoryTape32
 src/tiny_mistral_mptt/evaluation/   NLL, pass-depth, recurrent, lm-eval adapter
 src/tiny_mistral_mptt/inference/    K-general exact/recurrent cached inference
-configs/                            data/Mac/GPU experiment configs
+configs/                            current data/Mac/GPU/smoke configs
+experiments/                        completed campaign records and sweep configs
 eval_configs/                       external benchmark suites
-docs/                               protocol, data, provenance, validation
-tests/                              offline unit/contract tests
+docs/                               protocol, provenance, validation contracts
+tests/                              offline numerical/causality/trajectory tests
 ```
 
-See `docs/UPSTREAMS.md` for provenance and `docs/VALIDATION.md` for the tested
-and still-pending hardware gates.
+See `docs/VALIDATION.md` for the validated gates and
+`experiments/memory_phase_b/` for the main memory results obtained so far.

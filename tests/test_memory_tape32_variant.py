@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from conftest import micro_config
@@ -56,3 +57,12 @@ def test_memory_tape_phase_b_later_pass_loss_backpropagates_through_previous_pas
     output.loss.backward()
     assert variant.backbone.model.embed_tokens.weight.grad is not None
     assert torch.isfinite(variant.backbone.model.embed_tokens.weight.grad).all()
+
+
+def test_cached_memory_reader_requires_one_token_query():
+    variant = make_variant()
+    dim = variant.config.hidden_size
+    hidden = torch.randn(1, 2, dim)
+    memory = torch.randn(1, 3, dim)
+    with pytest.raises(ValueError, match=r"query must be \[B,1,D\]"):
+        variant.memory_readers[0].forward_bank(hidden, memory)

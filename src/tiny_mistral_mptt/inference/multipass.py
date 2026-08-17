@@ -38,6 +38,10 @@ def prefill_exact(
     continuation token.
     """
     _validate_prompt(input_ids, passes)
+    if passes > 1 and not model.supports_cached_feedback:
+        raise ValueError(
+            f"{model.variant_name} does not implement cached feedback inference"
+        )
 
     first_hidden, first_cache = model._run_first_hidden_cached(input_ids)
     hidden_sequences = [first_hidden]
@@ -55,14 +59,26 @@ def prefill_exact(
             hidden_sequences.append(previous)
             caches.append(cache)
 
-    streams = tuple(
-        PassStreamState(
-            past_key_values=cache,
-            feedback_memory=model._feedback_memory_from_hidden(hidden),
-            last_hidden=hidden[:, -1:, :].detach(),
+    if passes == 1:
+        # K=1 is the vanilla cached boundary and must not require a variant to
+        # implement any feedback-state protocol. The placeholder memory is not
+        # consumed while feedback is disabled.
+        streams = (
+            PassStreamState(
+                past_key_values=first_cache,
+                feedback_memory=first_hidden[:, -1:, :].detach(),
+                last_hidden=first_hidden[:, -1:, :].detach(),
+            ),
         )
-        for hidden, cache in zip(hidden_sequences, caches, strict=True)
-    )
+    else:
+        streams = tuple(
+            PassStreamState(
+                past_key_values=cache,
+                feedback_memory=model._feedback_memory_from_hidden(hidden),
+                last_hidden=hidden[:, -1:, :].detach(),
+            )
+            for hidden, cache in zip(hidden_sequences, caches, strict=True)
+        )
     logits = model.backbone.lm_head(hidden_sequences[-1][:, -1:, :]).float()[:, -1, :]
     return ExactIncrementalState(
         prefill_passes=passes,
@@ -141,22 +157,31 @@ def exact_decode_step(
         new_hiddens.append(hidden)
         new_caches.append(cache)
 
-    streams = tuple(
-        PassStreamState(
-            past_key_values=cache,
-            feedback_memory=model._append_feedback_memory(
-                old_stream.feedback_memory,
-                hidden,
+    if state.prefill_passes == 1:
+        streams = (
+            PassStreamState(
+                past_key_values=first_cache,
+                feedback_memory=first_hidden[:, -1:, :].detach(),
+                last_hidden=first_hidden[:, -1:, :].detach(),
             ),
-            last_hidden=hidden[:, -1:, :].detach(),
         )
-        for old_stream, hidden, cache in zip(
-            state.streams,
-            new_hiddens,
-            new_caches,
-            strict=True,
+    else:
+        streams = tuple(
+            PassStreamState(
+                past_key_values=cache,
+                feedback_memory=model._append_feedback_memory(
+                    old_stream.feedback_memory,
+                    hidden,
+                ),
+                last_hidden=hidden[:, -1:, :].detach(),
+            )
+            for old_stream, hidden, cache in zip(
+                state.streams,
+                new_hiddens,
+                new_caches,
+                strict=True,
+            )
         )
-    )
     logits = model.backbone.lm_head(new_hiddens[-1][:, -1:, :]).float()[:, -1, :]
     return ExactIncrementalState(
         prefill_passes=state.prefill_passes,

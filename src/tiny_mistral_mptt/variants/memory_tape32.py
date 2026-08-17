@@ -115,6 +115,8 @@ class MemoryTapeReader(nn.Module):
         memory_states: torch.Tensor,
     ) -> torch.Tensor:
         """Attend to a bank whose entries are already strictly in the past."""
+        if hidden_states.ndim != 3 or hidden_states.shape[1] != 1:
+            raise ValueError("cached MemoryTape32 query must be [B,1,D]")
         if memory_states.shape[1] > self.window:
             raise ValueError("cached memory bank exceeds configured window")
         bsz, query_len, _ = hidden_states.shape
@@ -134,6 +136,7 @@ class MemoryTape32Variant(MultiPassVariant):
     """Per-layer cross-attention to the previous pass's last 32 deep states."""
 
     variant_name = "memory_tape32"
+    supports_cached_feedback = True
 
     def __init__(
         self,

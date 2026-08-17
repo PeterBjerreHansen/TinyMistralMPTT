@@ -125,8 +125,8 @@ The scheduler has an independent RNG, sample counter, and pass histogram. Its
 state is checkpointed so interrupted/resumed training reproduces the same
 future pass-count draws.
 
-The initial Mac wiring configs deliberately use fixed `K=2`. Mixed schedules
-are an experimental knob, not a requirement.
+The canonical Mac wiring configs currently use fixed `K=2`. Mixed schedules
+remain an experimental knob, not a requirement or an implementation limit.
 
 ## Phase A: wiring
 
@@ -139,9 +139,10 @@ Phase A exists only for multipass variants.
   trainable Phase-A parameters;
 - later passes remain differentiable through the added recurrent pathway.
 
-The checked-in starting configs use fixed two-pass batches and final-pass-only
-supervision. This is a conservative wiring recipe, not a scientific claim that
-it is optimal.
+The checked-in memory Phase-A configs use fixed two-pass batches, final-pass-only
+supervision, and a 1,048,576-token frozen-backbone budget. This is the mature
+wiring recipe established by the completed campaign, not a claim that K=2 is
+architecturally special.
 
 ## Phase B: adaptation
 
@@ -161,8 +162,8 @@ added_learning_rate: 1.0e-6
 ```
 
 A zero or very small pretrained LR is therefore possible without changing the
-phase semantics. The checked-in Mac configs use a 10x lower pretrained LR as a
-starting point.
+phase semantics. The canonical memory Phase-B configs use the selected `1e-7`
+pretrained LR and `1e-6` added LR from the controlled dose-response campaign.
 
 ## LR schedules
 
@@ -247,14 +248,39 @@ The existing lm-evaluation-harness adapter currently exercises ordinary
 one-pass forward/generation semantics. It remains useful for the vanilla
 control but is not yet the primary multipass metric.
 
+### K-general incremental/recurrent evaluation
+
+MemoryAdd and MemoryTape32 now support explicit cached inference with an
+inference-time prompt depth `K >= 1`. This is separate from the pass-count
+training schedule and from `eval_passes`.
+
+`exact_incremental` keeps K independent TinyMistral self-attention KV streams.
+At each appended position, every stream reads only the feedback memory that
+existed before that position was processed. This snapshot-before-update rule is
+required to preserve strict previous-position causality. The exact cached path
+is tested against full finite-pass recomputation for K in `{1,2,3,4}`.
+
+`recurrent` performs the same K-pass prompt prefill and then collapses to the
+final pass's KV cache. For K>1 its initial feedback state is taken from pass
+K-1, so the first processed continuation token is identical to exact K-pass
+inference. Thereafter newly produced final-pass states are fed back to the same
+stream. K=1 keeps feedback disabled and is exactly vanilla cached inference.
+
+`scripts/eval_recurrent.py` teacher-forces a held-out continuation and reports
+exact-K, recurrent-K, and pass-1 NLL by horizon, plus final-hidden RMS drift and
+cosine similarity. The current K=2-trained checkpoints should be evaluated
+first, but the implementation accepts arbitrary positive prefill K without a
+code change.
+
 ## Generation boundary
 
-Finite-pass training/evaluation is implemented first. Online recurrent
-generation for FBT, MemoryAdd, and MemoryTape32 is intentionally not included yet. Until
-that gate is implemented, multipass wrappers delegate public `generate()` to
-vanilla TinyMistral and must not be presented as recurrent decoders.
+The recurrent **state transition and teacher-forced evaluator** are implemented
+for MemoryAdd and MemoryTape32. Free-running sampling is still deliberately
+separate: public multipass `generate()` continues to delegate to vanilla
+TinyMistral so lm-eval and ordinary model-call semantics do not change silently.
+FBT does not yet opt into the cached recurrent hooks.
 
-## Initial Mac gate
+## Current Mac operating point
 
 The first useful run is intentionally modest:
 
@@ -277,6 +303,9 @@ For each multipass model inspect:
 - added parameter count;
 - tokens/sec and token-equivalent compute.
 
-Only after the relevant architecture clears its finite-pass gate should pass-weight curricula,
-mixed pass schedules, larger datasets, multiple seeds, or recurrent decoding be
-expensive priorities.
+The finite-pass wiring and conservative Phase-B gates have now been cleared for
+MemoryAdd and MemoryTape32. Detailed campaign results and exact sweep configs live
+under `experiments/memory_phase_b/`. Their next research gate is the exact-K versus
+collapsed-recurrent continuation experiment described above. K=3/multi-depth
+training should remain a response to measured recurrent drift rather than be
+introduced before that drift is characterized.

@@ -11,10 +11,17 @@ import torch
 
 _DEFAULT_EXPERIMENT_FIELDS = {
     "prefix_mixin_probability": 0.0,
-    "fbt_initialization": "default",
-    "fbt_calibration_split": "validation",
-    "fbt_calibration_block": 0,
-    "fbt_gate_logit_std_target": 1.0,
+}
+
+# These one-off FBT calibration controls existed in format-v2 checkpoints but
+# never affect a resumed trajectory after model/optimizer state is restored.
+# Ignore them so current configs can resume historical checkpoints without
+# keeping the retired calibration experiment in the stable config surface.
+_LEGACY_NON_TRAJECTORY_FIELDS = {
+    "fbt_initialization",
+    "fbt_calibration_split",
+    "fbt_calibration_block",
+    "fbt_gate_logit_std_target",
 }
 
 
@@ -87,6 +94,7 @@ def _resume_config_view(config: dict) -> dict:
         "eval_batches",
         "eval_passes",
         "checkpoint_every_tokens",
+        *_LEGACY_NON_TRAJECTORY_FIELDS,
     }
     result = {
         key: value for key, value in config.items() if key not in ignored

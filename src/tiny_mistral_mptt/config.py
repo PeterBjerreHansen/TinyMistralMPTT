@@ -10,7 +10,6 @@ import yaml
 
 SUPPORTED_VARIANTS = {"vanilla", "fbt", "memory_add", "memory_tape32"}
 SUPPORTED_LR_SCHEDULES = {"constant", "cosine", "piecewise_linear"}
-SUPPORTED_FBT_INITIALIZATIONS = {"default", "calibrated"}
 
 
 def _coerce_pass_probabilities(raw: Any) -> dict[int, float]:
@@ -151,10 +150,6 @@ class ExperimentConfig:
     pass_loss_weights: list[float] | None = None
     memory_window: int = 32
     prefix_mixin_probability: float = 0.0
-    fbt_initialization: str = "default"
-    fbt_calibration_split: str = "validation"
-    fbt_calibration_block: int = 0
-    fbt_gate_logit_std_target: float = 1.0
 
     # ``resume_from`` restores the exact run. ``init_from`` loads model weights
     # only and begins a fresh trajectory/optimizer/data schedule.
@@ -215,24 +210,6 @@ class ExperimentConfig:
             raise ValueError(
                 "prefix_mixin_probability is currently supported only for variant=fbt"
             )
-        if self.fbt_initialization not in SUPPORTED_FBT_INITIALIZATIONS:
-            raise ValueError(
-                f"fbt_initialization must be one of {sorted(SUPPORTED_FBT_INITIALIZATIONS)}"
-            )
-        if self.variant != "fbt" and self.fbt_initialization != "default":
-            raise ValueError(
-                "fbt_initialization is currently supported only for variant=fbt"
-            )
-        if self.fbt_calibration_split not in {"train", "validation"}:
-            raise ValueError("fbt_calibration_split must be 'train' or 'validation'")
-        if self.fbt_calibration_block < 0:
-            raise ValueError("fbt_calibration_block must be non-negative")
-        if (
-            not math.isfinite(float(self.fbt_gate_logit_std_target))
-            or self.fbt_gate_logit_std_target <= 0
-        ):
-            raise ValueError("fbt_gate_logit_std_target must be finite and positive")
-
         schedule = self.normalized_pass_schedule()
         pass_counts = {passes for stage in schedule for passes in stage["probabilities"]}
         if self.variant == "vanilla" and pass_counts != {1}:

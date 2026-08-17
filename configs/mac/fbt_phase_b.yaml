@@ -29,4 +29,4 @@ eval_batches: 16
 eval_passes: 2
 checkpoint_every_tokens: 131072
 resume_from: null
-init_from: runs/mac-fbt-phase-a/latest.pt
+init_from: null

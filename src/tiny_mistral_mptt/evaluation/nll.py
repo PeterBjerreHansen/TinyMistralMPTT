@@ -29,6 +29,8 @@ def evaluate_nll(
 ) -> NLLResult:
     if len(dataset) == 0:
         raise ValueError("validation dataset is empty")
+    if max_blocks is not None and max_blocks <= 0:
+        raise ValueError("max_blocks must be positive when provided")
     was_training = model.training
     model.eval()
     total_nll = 0.0

@@ -9,6 +9,7 @@ from tiny_mistral_mptt.inference import (
     prefill_recurrent,
     recurrent_decode_step,
 )
+from tiny_mistral_mptt.variants.fbt import FBTVariant
 from tiny_mistral_mptt.variants.memory_add import MemoryAddVariant
 from tiny_mistral_mptt.variants.memory_tape32 import MemoryTape32Variant
 
@@ -37,6 +38,22 @@ def make_variant(name: str):
 
 def sample_ids():
     return torch.tensor([[1, 7, 3, 14, 22, 9, 31, 4, 51, 12, 6, 44, 18]])
+
+
+def test_cached_feedback_capability_is_explicit_for_fbt():
+    backbone = MistralForCausalLM(
+        micro_config(num_hidden_layers=2, sliding_window=4),
+        attention_backend="reference",
+    )
+    model = FBTVariant(backbone, initialization_seed=987).eval()
+    prompt = sample_ids()[:, :5]
+
+    # K=1 is ordinary cached TinyMistral and remains supported.
+    state = prefill_exact(model, prompt, passes=1)
+    assert state.prefill_passes == 1
+
+    with pytest.raises(ValueError, match="does not implement cached feedback inference"):
+        prefill_exact(model, prompt, passes=2)
 
 
 @pytest.mark.parametrize("variant_name", ["memory_add", "memory_tape32"])

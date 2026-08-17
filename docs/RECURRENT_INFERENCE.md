@@ -74,6 +74,10 @@ Free-running recurrent sampling should be added only after teacher-forced drift
 has been measured and the explicit inference path is trusted on the target
 hardware.
 
+MemoryAdd and MemoryTape32 explicitly opt into cached feedback. FBT currently
+supports only the K=1 vanilla cached boundary; requesting K>1 through the cached
+inference API raises a clear capability error.
+
 ## Teacher-forced evaluator
 
 `scripts/eval_recurrent.py` compares three modes on the same held-out suffix:
@@ -86,8 +90,8 @@ Example:
 
 ```bash
 uv run python scripts/eval_recurrent.py \
-  --config configs/mac/memory_add_phase_b_selected_lr1e-7_long.yaml \
-  --checkpoint runs/mac-memory-add-phase-b-selected-lr1e-7-long/latest.pt \
+  --config configs/mac/memory_add_phase_b.yaml \
+  --checkpoint <checkpoint.pt> \
   --prefill-passes 1 2 3 4 8 \
   --prompt-tokens 256 \
   --continuation-tokens 256 \

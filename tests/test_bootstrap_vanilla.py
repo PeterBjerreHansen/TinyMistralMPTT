@@ -3,7 +3,7 @@ import torch
 
 from conftest import micro_config
 from tiny_mistral.modeling import MistralForCausalLM
-from tiny_mistral_mptt.training.phases import configure_phase, vanilla_phase_a_is_noop
+from tiny_mistral_mptt.training.phases import configure_phase
 from tiny_mistral_mptt.variants.vanilla import VanillaVariant
 
 
@@ -19,7 +19,7 @@ def test_vanilla_wrapper_is_exact_forward_identity():
 
 def test_vanilla_phase_a_is_explicit_noop_and_phase_b_unfreezes():
     wrapped = VanillaVariant(MistralForCausalLM(micro_config(), attention_backend="reference"))
-    assert vanilla_phase_a_is_noop(wrapped)
+    assert not tuple(wrapped.added_parameters())
     assert configure_phase(wrapped, "A") == 0
     assert not any(parameter.requires_grad for parameter in wrapped.parameters())
     trainable = configure_phase(wrapped, "B")

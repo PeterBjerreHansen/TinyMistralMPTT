@@ -85,14 +85,3 @@ def test_fbt_prefix_mixin_reverts_a_checkpoint_reproducible_prefix():
     torch.testing.assert_close(
         mixed[:, expected_prefix:, :], raw[:, expected_prefix:, :]
     )
-
-
-def test_fbt_calibrated_initialization_matches_embedding_and_gate_scales():
-    variant = make_variant()
-    ids = torch.tensor([[1, 2, 3, 4, 5, 6]])
-    stats = variant.calibrate_initialization(ids, gate_logit_std_target=1.0)
-    assert stats["value_scale"] < 1.0
-    assert stats["gate_scale"] > 1.0
-    assert abs(stats["post_fused_rms"] - stats["embedding_rms"]) < 1e-6
-    assert abs(stats["post_gate_logit_std"] - 1.0) < 1e-6
-    assert stats["post_gate_std"] > stats["pre_gate_std"]
