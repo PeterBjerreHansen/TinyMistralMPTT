@@ -78,7 +78,16 @@ def _resume_config_view(config: dict) -> dict:
     # These fields identify where/how a resume is invoked, not the trajectory.
     # ``max_unique_tokens`` is a stopping budget, so allowing it to increase is
     # what makes an exact frozen-phase continuation possible.
-    ignored = {"output_dir", "resume_from", "max_unique_tokens"}
+    ignored = {
+        "output_dir",
+        "resume_from",
+        "max_unique_tokens",
+        "init_from",
+        "eval_every_tokens",
+        "eval_batches",
+        "eval_passes",
+        "checkpoint_every_tokens",
+    }
     result = {
         key: value for key, value in config.items() if key not in ignored
     }

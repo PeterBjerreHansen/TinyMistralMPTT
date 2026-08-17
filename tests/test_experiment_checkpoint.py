@@ -135,6 +135,50 @@ def test_checkpoint_resume_accepts_new_default_experiment_fields(tmp_path):
     )
 
 
+def test_checkpoint_resume_allows_new_output_and_evaluation_schedule(tmp_path):
+    model = torch.nn.Linear(2, 2)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, foreach=False)
+    sampler = StatefulBlockSampler(5, seed=3)
+    path = save_checkpoint(
+        tmp_path / "schedule.pt",
+        model=model,
+        optimizer=optimizer,
+        sampler_state=sampler.state_dict(),
+        train_state=TrainState(unique_tokens_seen=7),
+        experiment_config={
+            "variant": "memory_add",
+            "phase": "B",
+            "init_from": "source.pt",
+            "eval_every_tokens": 65536,
+            "eval_batches": 16,
+            "eval_passes": 2,
+            "checkpoint_every_tokens": 65536,
+        },
+        data_manifest_sha256="same",
+    )
+    replacement = torch.nn.Linear(2, 2)
+    replacement_optimizer = torch.optim.AdamW(replacement.parameters(), lr=1e-3, foreach=False)
+    state, _ = load_checkpoint(
+        path,
+        model=replacement,
+        optimizer=replacement_optimizer,
+        expected_manifest_sha256="same",
+        expected_experiment_config={
+            "variant": "memory_add",
+            "phase": "B",
+            "init_from": None,
+            "output_dir": "new-output",
+            "resume_from": str(path),
+            "max_unique_tokens": 1048576,
+            "eval_every_tokens": 262144,
+            "eval_batches": 32,
+            "eval_passes": 8,
+            "checkpoint_every_tokens": 262144,
+        },
+    )
+    assert state.unique_tokens_seen == 7
+
+
 def test_version1_checkpoint_allows_new_default_config_fields(tmp_path):
     model = torch.nn.Linear(2, 2)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, foreach=False)
