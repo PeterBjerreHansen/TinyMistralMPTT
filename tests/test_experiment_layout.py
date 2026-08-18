@@ -5,9 +5,10 @@ import yaml
 from tiny_mistral_mptt.config import load_experiment_config
 from tiny_mistral_mptt.data.config import load_data_config
 
-
 ROOT = Path(__file__).resolve().parents[1]
-HISTORICAL_RESULTS = ROOT / "benchmarks" / "historical" / "stage2_cleanroom_v1" / "results"
+HISTORICAL_RESULTS = (
+    ROOT / "benchmarks" / "historical" / "stage2_cleanroom_v1" / "results"
+)
 
 
 def _active_config_paths() -> list[Path]:
@@ -60,9 +61,7 @@ def test_default_experiment_config_uses_active_2048_context():
 
 
 def test_local_2048_data_recipe_parses():
-    cfg = load_data_config(
-        ROOT / "data" / "dolmino" / "local_2048" / "config.yaml"
-    )
+    cfg = load_data_config(ROOT / "data" / "dolmino" / "local_2048" / "config.yaml")
     assert cfg.output_dir == "data/dolmino/local_2048"
     assert cfg.sequence_length == 2048
     assert cfg.train_tokens == 1_048_576
@@ -78,8 +77,8 @@ def test_data_recipes_live_beside_their_artifacts():
         assert cfg.sequence_length == 2048
 
 
-def test_lm_evaluation_suites_live_with_the_ad_hoc_study():
-    suite_dir = ROOT / "benchmarks" / "ad_hoc" / "lm_evaluation"
+def test_lm_evaluation_suites_live_with_the_data_assets():
+    suite_dir = ROOT / "data" / "lm_evaluation"
     assert (suite_dir / "README.md").exists()
     assert (suite_dir / "results" / "README.md").exists()
     for name in ("quick.yaml", "full.yaml"):

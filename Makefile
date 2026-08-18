@@ -44,7 +44,7 @@ evaluate-nll:
 evaluate-quick:
 	uv run python scripts/evaluate_lm_harness.py \
 		--config benchmarks/controls/substrate/mac.yaml \
-		--suite benchmarks/ad_hoc/lm_evaluation/quick.yaml --limit 100
+		--suite data/lm_evaluation/quick.yaml --limit 100
 
 substrate-gates: check verify hf-check hf-layers hf-embeds mps-smoke
 

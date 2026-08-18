@@ -21,5 +21,13 @@ data/dolmino/local_2048/*
 !data/dolmino/gpu_2048/
 data/dolmino/gpu_2048/*
 !data/dolmino/gpu_2048/config.yaml
+!data/lm_evaluation/
+data/lm_evaluation/*
+!data/lm_evaluation/README.md
+!data/lm_evaluation/full.yaml
+!data/lm_evaluation/quick.yaml
+!data/lm_evaluation/results/
+data/lm_evaluation/results/*
+!data/lm_evaluation/results/README.md
 runs/
 .coverage

@@ -8,7 +8,7 @@ Run the short suite with:
 
 ```bash
 uv run python scripts/evaluate_lm_harness.py \
-  --config benchmarks/controls/substrate/mac.yaml \
-  --suite benchmarks/ad_hoc/lm_evaluation/quick.yaml \
-  --limit 100
+	--config benchmarks/controls/substrate/mac.yaml \
+	--suite data/lm_evaluation/quick.yaml \
+	--limit 100
 ```
