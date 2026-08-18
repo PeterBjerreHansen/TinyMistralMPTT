@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 import torch
 
@@ -68,6 +69,9 @@ def test_end_to_end_vanilla_trainer_and_resume(tmp_path):
     assert state1.unique_tokens_seen == 32
     checkpoint = tmp_path / "run1" / "latest.pt"
     assert checkpoint.exists()
+    source = json.loads((tmp_path / "run1" / "run.json").read_text())["source"]
+    assert len(source["git_commit"]) == 40
+    assert isinstance(source["git_dirty"], bool)
 
     second_cfg = ExperimentConfig.from_dict({**first_cfg.to_dict(),
         "output_dir": str(tmp_path / "run2"),

@@ -1,5 +1,5 @@
 .PHONY: test compile check download verify hf-check hf-layers hf-embeds \
-  mps-smoke prepare-data verify-data evaluate-nll evaluate-quick substrate-gates cleanroom-gates
+  mps-smoke prepare-data verify-data evaluate-nll evaluate-quick substrate-gates cleanroom-gates k-sweep-gates
 
 test:
 	uv run pytest -q
@@ -48,3 +48,7 @@ substrate-gates: check verify hf-check hf-layers hf-embeds mps-smoke
 
 # Assumes the pinned backbone and clean-room data artifact are present.
 cleanroom-gates: check verify-data
+
+# Requires a committed, clean source tree before starting the selected-LR K sweep.
+k-sweep-gates: check
+	uv run python scripts/verify_k_sweep.py

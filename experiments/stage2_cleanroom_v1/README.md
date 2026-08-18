@@ -4,22 +4,25 @@ This directory contains the independent evidence used to select the locked
 Stage 2 protocol. The starting points, hashes, protocol, and results are in
 `PROTOCOL.yaml` and `results/`.
 
-## Completed arms
+## Evidence layout
 
 - `wiring/`: fresh MemoryAdd and MemoryTape32 wiring checkpoints.
 - `learning_rate/`: independent backbone learning-rate arms.
-- `pass_depth/`: K=2, K=3, and compute-matched K=3 controls.
-- `mixtures/`: optional K=2/K=3 schedules with K-specific loss weights.
+- `pass_depth/`: historical K=2/K=3 arms at the superseded 3e-7 backbone LR.
+- `mixtures/`: historical mixed-K arms at the superseded 3e-7 backbone LR.
+- `k_sweep/`: active final K-schedule comparison at the selected 1e-6 LR.
 
 Each config has a matching generated run directory under
 `runs/stage2_cleanroom_v1/`.
 
-## Locked choice
+## Current decision
 
-The promoted Stage 2 configs use K=3, pass weights `[0.05, 0.20, 0.75]`, backbone
-learning rate `3e-7`, added-parameter learning rate `1e-6`, and 1,048,576
-unique tokens. K=2 and compute-matched K=3 remain controls.
+E2 selected a common Phase-B backbone and added-parameter learning rate of
+`1e-6`. The final K schedule and recurrent inference depth are not locked yet.
+The active sweep compares K=2, 90/10 K2/K3, 50/50 K2/K3, and K=3, all from
+the clean E1 wiring checkpoints with 1,048,576 unique tokens.
 
-The mixed-K runs are diagnostics only. They sample K independently per
+The historical mixed-K runs are development evidence only. The active mixed-K
+arms sample K independently per
 microbatch, record realized histograms and compute, and preserve scheduler/RNG
 state in their checkpoints.

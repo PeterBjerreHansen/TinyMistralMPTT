@@ -1,7 +1,10 @@
-# K=3 pass depth and inference
+# Historical K=3 pass depth and inference
 
-This is the replacement record for the standalone K=3 arms. The superseded
-checkpoints and note were removed before rerunning. All four arms use:
+> Superseded protocol-development evidence. These runs used backbone LR
+> `3e-7`; the selected-LR rerun is under `configs/k_sweep/` and
+> `runs/stage2_cleanroom_v1/k_sweep/`.
+
+This is the record for the earlier standalone K=3 arms. All four arms use:
 
 - pass weights `[0.05, 0.20, 0.75]`
 - backbone learning rate `3e-7`
@@ -22,7 +25,8 @@ The endpoint validation above uses 16 blocks, matching the training config.
 
 ## Full pass-depth diagnostic
 
-The following values use 256 validation blocks and evaluate passes 1–8.
+The following values use 256 validation blocks and evaluate passes 1–8. They
+remain useful as historical evidence but are not the final K-selection data.
 
 | variant | token budget | pass 2 | pass 3 | pass 8 |
 | --- | --- | ---: | ---: | ---: |
@@ -77,5 +81,5 @@ experiments/stage2_cleanroom_v1/configs/pass_depth/memory_tape32/k3_tokens_10485
 experiments/stage2_cleanroom_v1/configs/pass_depth/memory_tape32/k3_compute_matched_tokens_699392.yaml
 ```
 
-The active promoted configs under `configs/stage2/` use the same K=3 loss
-weights.
+The active selected-LR configs are the eight files under
+`experiments/stage2_cleanroom_v1/configs/k_sweep/`.

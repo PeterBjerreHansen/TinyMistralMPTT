@@ -1,7 +1,11 @@
-# K=2/K=3 mixture results
+# Historical K=2/K=3 mixture results
+
+> Superseded protocol-development evidence. These runs used backbone LR
+> `3e-7`; the selected-LR rerun is under `configs/k_sweep/` and
+> `runs/stage2_cleanroom_v1/k_sweep/`.
 
 These four optional mixture arms were run on 2026-08-18 from the clean E1
-wiring checkpoints. They used the selected Stage-2 learning rates:
+wiring checkpoints. They used the then-current, now superseded rates:
 
 - backbone learning rate: `3e-7`
 - added-parameter learning rate: `1e-6`

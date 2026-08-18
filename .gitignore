@@ -15,3 +15,7 @@ artifacts/
 data/
 runs/
 .coverage
+
+# The clean-room data recipe is source provenance, not generated data.
+!experiments/stage2_cleanroom_v1/configs/data/
+!experiments/stage2_cleanroom_v1/configs/data/artifact.yaml

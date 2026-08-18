@@ -4,6 +4,7 @@ from collections import defaultdict
 import json
 from pathlib import Path
 import random
+import subprocess
 import time
 
 import torch
@@ -37,6 +38,27 @@ def _set_seed(seed: int) -> None:
 
 def _parameter_count(parameters) -> int:
     return sum(parameter.numel() for parameter in parameters)
+
+
+def _source_provenance() -> dict[str, bool | str | None]:
+    """Return the source revision used to create a run manifest."""
+    repository = Path(__file__).resolve().parents[3]
+    try:
+        commit = subprocess.check_output(
+            ["git", "-C", str(repository), "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        dirty = bool(
+            subprocess.check_output(
+                ["git", "-C", str(repository), "status", "--porcelain"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return {"git_commit": None, "git_dirty": None}
+    return {"git_commit": commit, "git_dirty": dirty}
 
 
 class Trainer:
@@ -90,6 +112,7 @@ class Trainer:
             if parameter.requires_grad and id(parameter) in added_ids
         ]
         run_info = {
+            "source": _source_provenance(),
             "config": config.to_dict(),
             "data_manifest_sha256": self.manifest_sha256,
             "sequence_length": train_data.sequence_length,

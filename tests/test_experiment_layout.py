@@ -31,12 +31,13 @@ def test_locked_layout_is_explicit():
 
     assert (LINEAGE / "README.md").exists()
     assert (LINEAGE / "PROTOCOL.yaml").exists()
-    assert list((ROOT / "configs" / "stage2").glob("*.yaml"))
+    assert not list((ROOT / "configs" / "stage2").glob("*.yaml"))
 
 
 def test_protocol_is_pinned():
     manifest = yaml.safe_load((LINEAGE / "PROTOCOL.yaml").read_text(encoding="utf-8"))
-    assert manifest["version"] == 2
+    assert manifest["version"] == 3
+    assert manifest["status"] == "k_schedule_pending"
     assert manifest["lineage"] == "stage2_cleanroom_v1"
     assert manifest["data"]["artifact"] == "data/stage2_cleanroom_v1/sequence_512"
     assert manifest["starting_points"]["memory_add"]["checkpoint"].startswith(
@@ -45,16 +46,10 @@ def test_protocol_is_pinned():
     assert manifest["starting_points"]["memory_tape32"]["checkpoint"].startswith(
         "runs/stage2_cleanroom_v1/"
     )
-    assert manifest["locked_protocol"]["backbone_learning_rate"] == 3.0e-7
+    assert manifest["locked_protocol"]["backbone_learning_rate"] == 1.0e-6
     assert manifest["locked_protocol"]["added_learning_rate"] == 1.0e-6
-    assert manifest["locked_protocol"]["passes"] == 3
-    assert manifest["locked_protocol"]["pass_loss_weights"] == [0.05, 0.20, 0.75]
-
-
-def test_promoted_k3_configs_use_locked_weights():
-    for path in (ROOT / "configs" / "stage2").glob("*.yaml"):
-        config = load_experiment_config(path)
-        assert config.pass_loss_weights == [0.05, 0.20, 0.75]
+    assert manifest["locked_protocol"]["k_schedule"] == "pending"
+    assert len(manifest["locked_protocol"]["k_sweep"]) == 4
 
 
 def test_data_recipe_parses():
@@ -69,6 +64,35 @@ def test_all_active_experiment_configs_parse():
     assert paths
     for path in paths:
         load_experiment_config(path)
+
+
+def test_learning_rate_sweep_includes_high_lr_arm():
+    expected = {0.0, 3.0e-8, 1.0e-7, 3.0e-7, 1.0e-6, 3.0e-6, 1.0e-5}
+    for variant in ("memory_add", "memory_tape32"):
+        paths = (LINEAGE / "configs" / "learning_rate" / variant).glob("backbone_lr_*.yaml")
+        observed = {load_experiment_config(path).pretrained_learning_rate for path in paths}
+        assert observed == expected
+
+
+def test_vanilla_learning_rate_controls_are_present():
+    paths = (LINEAGE / "configs" / "learning_rate" / "vanilla").glob("backbone_lr_*.yaml")
+    observed = {load_experiment_config(path).learning_rate for path in paths}
+    assert observed == {3.0e-7, 1.0e-6, 3.0e-6}
+
+
+def test_selected_lr_k_sweep_configs_are_complete():
+    expected = {"k2", "k2_90_k3_10", "k2_50_k3_50", "k3"}
+    for variant in ("memory_add", "memory_tape32"):
+        paths = {
+            path.stem: path
+            for path in (LINEAGE / "configs" / "k_sweep" / variant).glob("*.yaml")
+        }
+        assert set(paths) == expected
+        for path in paths.values():
+            config = load_experiment_config(path)
+            assert config.pretrained_learning_rate == 1.0e-6
+            assert config.added_learning_rate == 1.0e-6
+            assert config.max_unique_tokens == 1_048_576
 
 
 def test_config_and_run_namespaces_are_current():

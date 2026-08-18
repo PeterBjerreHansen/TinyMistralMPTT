@@ -1,18 +1,19 @@
-variant: memory_add
+variant: memory_tape32
 phase: B
 model_dir: checkpoints/TinyMistral-248M-v3
 data_dir: data/stage2_cleanroom_v1/sequence_512
-output_dir: runs/stage2/memory_add_k3
+output_dir: runs/stage2_cleanroom_v1/k_sweep/memory_tape32/k2_90_k3_10
 device: mps
 dtype: float32
 attention_backend: auto
 seed: 1337
 architecture_seed: 4242
+memory_window: 32
 batch_size: 1
 grad_accum_steps: 4
 max_unique_tokens: 1048576
 learning_rate: 1.0e-6
-pretrained_learning_rate: 3.0e-7
+pretrained_learning_rate: 1.0e-6
 added_learning_rate: 1.0e-6
 lr_schedule:
   type: constant
@@ -20,11 +21,15 @@ weight_decay: 0.01
 grad_clip: 1.0
 pass_schedule:
   - probabilities:
-      3: 1.0
-pass_loss_weights: [0.05, 0.20, 0.75]
+      2: 0.9
+      3: 0.1
+pass_loss_weights_by_k:
+  2: [0.25, 0.75]
+  3: [0.05, 0.20, 0.75]
 eval_every_tokens: 262144
 eval_batches: 16
 eval_passes: 3
 checkpoint_every_tokens: 262144
 resume_from: null
-init_from: runs/stage2_cleanroom_v1/wiring/memory_add/latest.pt
+init_from: runs/stage2_cleanroom_v1/wiring/memory_tape32/latest.pt
+

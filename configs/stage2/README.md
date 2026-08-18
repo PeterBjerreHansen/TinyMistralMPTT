@@ -1,9 +1,14 @@
-# Stage 2 main configurations
+# Stage 2 protocol pending
 
-These are the locked K=3 main-run entry points:
+Stage 2 is open for protocol development. E2 selected a common Phase-B
+backbone and added-parameter learning rate of `1e-6`, but no K schedule or
+recurrent inference depth is canonical yet.
 
-- `memory_add_k3.yaml`
-- `memory_tape32_k3.yaml`
+The active comparison is the eight-arm sweep under:
 
-Controls and protocol-development arms remain under
-`experiments/stage2_cleanroom_v1/`.
+```text
+experiments/stage2_cleanroom_v1/configs/k_sweep/
+```
+
+Do not start a main Stage 2 run from this directory until the K schedule is
+selected and the protocol is relocked.
