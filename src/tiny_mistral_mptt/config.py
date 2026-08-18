@@ -10,6 +10,7 @@ import yaml
 
 SUPPORTED_VARIANTS = {"vanilla", "fbt", "memory_add", "memory_tape32"}
 SUPPORTED_LR_SCHEDULES = {"constant", "cosine", "piecewise_linear"}
+SUPPORTED_AUTOCAST_DTYPES = {"bfloat16"}
 
 
 def _coerce_pass_probabilities(raw: Any) -> dict[int, float]:
@@ -143,6 +144,7 @@ class ExperimentConfig:
     output_dir: str = "runs/dev/vanilla"
     device: str = "auto"
     dtype: str = "float32"
+    autocast_dtype: str | None = None
     attention_backend: str = "auto"
     seed: int = 1337
     architecture_seed: int = 4242
@@ -215,6 +217,16 @@ class ExperimentConfig:
             raise ValueError("phase must be 'A' or 'B'")
         if self.resume_from and self.init_from:
             raise ValueError("resume_from and init_from are mutually exclusive")
+        if self.autocast_dtype is not None:
+            if self.autocast_dtype not in SUPPORTED_AUTOCAST_DTYPES:
+                raise ValueError(
+                    f"autocast_dtype must be one of {sorted(SUPPORTED_AUTOCAST_DTYPES)}"
+                )
+            if self.dtype != "float32":
+                raise ValueError(
+                    "autocast training requires dtype=float32 so learned parameters "
+                    "and AdamW state remain FP32"
+                )
         if self.batch_size <= 0 or self.grad_accum_steps <= 0:
             raise ValueError("batch_size and grad_accum_steps must be positive")
         if self.max_unique_tokens <= 0:

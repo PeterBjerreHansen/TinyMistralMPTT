@@ -1,5 +1,8 @@
 .PHONY: test compile check download verify hf-check hf-layers hf-embeds \
-  mps-smoke prepare-data verify-data evaluate-nll evaluate-quick substrate-gates cleanroom-gates k-sweep-gates
+  mps-smoke prepare-data verify-data evaluate-nll evaluate-quick substrate-gates cleanroom-gates k-sweep-gates \
+  efficiency-mps efficiency-cuda efficiency-mps-training efficiency-mps-precision \
+  efficiency-mps-context efficiency-mps-batch efficiency-cuda-training \
+  efficiency-cuda-precision efficiency-cuda-context efficiency-cuda-batch cloud-preflight
 
 test:
 	uv run pytest -q
@@ -52,3 +55,53 @@ cleanroom-gates: check verify-data
 # Requires a committed, clean source tree before starting the selected-LR K sweep.
 k-sweep-gates: check
 	uv run python scripts/verify_k_sweep.py
+
+# Engineering-only efficiency characterization. Results are written under runs/.
+efficiency-mps: efficiency-mps-training efficiency-mps-precision efficiency-mps-context efficiency-mps-batch
+
+efficiency-cuda: efficiency-cuda-training efficiency-cuda-precision efficiency-cuda-context efficiency-cuda-batch
+
+efficiency-mps-training:
+	uv run python scripts/benchmark_training_efficiency.py \
+		--suite efficiency_benchmarks/suites/training.yaml --device mps \
+		--output runs/efficiency/mps_training.json
+
+efficiency-mps-precision:
+	uv run python scripts/benchmark_training_efficiency.py \
+		--suite efficiency_benchmarks/suites/precision_mps.yaml \
+		--output runs/efficiency/mps_precision.json
+
+efficiency-mps-context:
+	uv run python scripts/benchmark_training_efficiency.py \
+		--suite efficiency_benchmarks/suites/context_scaling.yaml --device mps \
+		--output runs/efficiency/mps_context.json
+
+efficiency-mps-batch:
+	uv run python scripts/benchmark_training_efficiency.py \
+		--suite efficiency_benchmarks/suites/batch_scaling.yaml --device mps \
+		--output runs/efficiency/mps_batch.json
+
+efficiency-cuda-training:
+	uv run python scripts/benchmark_training_efficiency.py \
+		--suite efficiency_benchmarks/suites/training.yaml --device cuda \
+		--output runs/efficiency/cuda_training.json
+
+efficiency-cuda-precision:
+	uv run python scripts/benchmark_training_efficiency.py \
+		--suite efficiency_benchmarks/suites/precision_cuda.yaml \
+		--output runs/efficiency/cuda_precision.json
+
+efficiency-cuda-context:
+	uv run python scripts/benchmark_training_efficiency.py \
+		--suite efficiency_benchmarks/suites/context_scaling.yaml --device cuda --autocast-dtype bfloat16 \
+		--output runs/efficiency/cuda_context.json
+
+efficiency-cuda-batch:
+	uv run python scripts/benchmark_training_efficiency.py \
+		--suite efficiency_benchmarks/suites/batch_scaling.yaml --device cuda --autocast-dtype bfloat16 \
+		--output runs/efficiency/cuda_batch.json
+
+# Usage: make cloud-preflight CONFIG=path/to/config.yaml
+cloud-preflight:
+	@test -n "$(CONFIG)" || (echo "CONFIG is required" && exit 2)
+	uv run python scripts/cloud_preflight.py --config $(CONFIG)

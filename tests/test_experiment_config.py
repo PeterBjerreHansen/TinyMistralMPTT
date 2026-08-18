@@ -62,3 +62,16 @@ def test_yaml_style_string_k_keys_are_canonicalized():
         2: [0.25, 0.75],
         3: [0.05, 0.20, 0.75],
     }
+
+
+def test_bfloat16_autocast_requires_fp32_parameter_storage():
+    cfg = _config(dtype="float32", autocast_dtype="bfloat16")
+    assert cfg.autocast_dtype == "bfloat16"
+
+    with pytest.raises(ValueError, match="requires dtype=float32"):
+        _config(dtype="bfloat16", autocast_dtype="bfloat16")
+
+
+def test_unvalidated_autocast_dtype_is_rejected():
+    with pytest.raises(ValueError, match="autocast_dtype"):
+        _config(autocast_dtype="float16")

@@ -12,6 +12,7 @@ import torch
 _DEFAULT_EXPERIMENT_FIELDS = {
     "prefix_mixin_probability": 0.0,
     "pass_loss_weights_by_k": None,
+    "autocast_dtype": None,
 }
 
 # These one-off FBT calibration controls existed in format-v2 checkpoints but

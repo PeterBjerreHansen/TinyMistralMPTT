@@ -3,7 +3,8 @@ model_dir: checkpoints/TinyMistral-248M-v3
 data_dir: data/dolmino/gpu_2048
 output_dir: runs/substrate/gpu/vanilla
 device: cuda
-dtype: bfloat16
+dtype: float32
+autocast_dtype: bfloat16
 attention_backend: auto
 seed: 1337
 batch_size: 4

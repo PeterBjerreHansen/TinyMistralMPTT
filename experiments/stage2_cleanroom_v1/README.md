@@ -19,8 +19,9 @@ Each config has a matching generated run directory under
 
 E2 selected a common Phase-B backbone and added-parameter learning rate of
 `1e-6`. The final K schedule and recurrent inference depth are not locked yet.
-The active sweep compares K=2, 90/10 K2/K3, 50/50 K2/K3, and K=3, all from
-the clean E1 wiring checkpoints with 1,048,576 unique tokens.
+The eight-arm sweep is complete and is summarized in `results/k_sweep.md`.
+It compares K=2, 90/10 K2/K3, 50/50 K2/K3, and K=3, all from the clean E1
+wiring checkpoints with 1,048,576 unique tokens.
 
 The historical mixed-K runs are development evidence only. The active mixed-K
 arms sample K independently per

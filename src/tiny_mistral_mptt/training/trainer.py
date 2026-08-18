@@ -12,6 +12,7 @@ import torch
 from tiny_mistral.device import synchronize
 
 from ..config import ExperimentConfig
+from ..precision import autocast_context
 from ..data.manifest import file_sha256, verify_artifact
 from ..data.packed_dataset import PackedTokenDataset, StatefulBlockSampler
 from ..evaluation.nll import evaluate_nll
@@ -114,6 +115,10 @@ class Trainer:
         run_info = {
             "source": _source_provenance(),
             "config": config.to_dict(),
+            "precision": {
+                "parameter_dtype": config.dtype,
+                "autocast_dtype": config.autocast_dtype,
+            },
             "data_manifest_sha256": self.manifest_sha256,
             "sequence_length": train_data.sequence_length,
             "train_blocks": len(train_data),
@@ -235,6 +240,10 @@ class Trainer:
         }
 
     def _evaluate(self) -> dict:
+        with autocast_context(self.device, self.config.autocast_dtype):
+            return self._evaluate_with_precision()
+
+    def _evaluate_with_precision(self) -> dict:
         if self.config.eval_passes > 1:
             if not isinstance(self.model, MultiPassVariant):
                 raise ValueError("eval_passes>1 requires a multipass variant")
@@ -315,12 +324,13 @@ class Trainer:
                 indices = self.sampler.next_indices(cfg.batch_size)
                 ids = self.train_data.batch(indices, device=self.device)
                 passes = self.pass_scheduler.sample(self.state.unique_tokens_seen)
-                output = self.model.compute_loss(
-                    ids,
-                    phase=cfg.phase,
-                    passes=passes,
-                    loss_weights=cfg.loss_weights_for_passes(passes),
-                )
+                with autocast_context(self.device, cfg.autocast_dtype):
+                    output = self.model.compute_loss(
+                        ids,
+                        phase=cfg.phase,
+                        passes=passes,
+                        loss_weights=cfg.loss_weights_for_passes(passes),
+                    )
                 if not bool(torch.isfinite(output.loss).item()):
                     raise RuntimeError("non-finite training loss")
                 (output.loss / accumulation_steps).backward()
