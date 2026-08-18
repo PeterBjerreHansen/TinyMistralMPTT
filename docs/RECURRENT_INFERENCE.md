@@ -80,7 +80,8 @@ inference API raises a clear capability error.
 
 ## Teacher-forced evaluator
 
-`scripts/eval_recurrent.py` compares three modes on the same held-out suffix:
+`scripts/evaluate_recurrent_inference.py` compares three modes on the same
+held-out suffix:
 
 1. exact incremental K;
 2. collapsed recurrent K;
@@ -89,14 +90,14 @@ inference API raises a clear capability error.
 Example:
 
 ```bash
-uv run python scripts/eval_recurrent.py \
+uv run python scripts/evaluate_recurrent_inference.py \
   --config <experiment-config.yaml> \
   --checkpoint <checkpoint.pt> \
   --prefill-passes 1 2 3 4 8 \
   --prompt-tokens 256 \
   --continuation-tokens 256 \
   --horizons 1 2 4 8 16 32 64 128 256 \
-  --output runs/recurrent-memory-add.json
+  --output runs/diagnostics/recurrent_inference.json
 ```
 
 `--prefill-passes` accepts one or more positive K values. It is deliberately not

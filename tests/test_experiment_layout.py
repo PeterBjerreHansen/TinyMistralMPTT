@@ -3,132 +3,80 @@ from pathlib import Path
 import yaml
 
 from tiny_mistral_mptt.config import load_experiment_config
+from tiny_mistral_mptt.data.config import load_data_config
 
 
 ROOT = Path(__file__).resolve().parents[1]
+LINEAGE = ROOT / "experiments" / "stage2_cleanroom_v1"
 
 
-def _experiment_config_paths() -> list[Path]:
-    paths = [
-        ROOT / "configs" / "substrate" / "mac" / "vanilla.yaml",
-        ROOT / "configs" / "substrate" / "gpu" / "vanilla.yaml",
-        ROOT / "configs" / "smoke" / "vanilla.yaml",
-        ROOT / "configs" / "stage1" / "mac" / "memory_add_wiring.yaml",
-        ROOT / "configs" / "stage1" / "mac" / "memory_tape32_wiring.yaml",
-        ROOT / "experiments" / "stage1_starting_points" / "memory_add_wired_checkpoint.yaml",
-        ROOT / "experiments" / "stage1_starting_points" / "memory_tape32_wired_checkpoint.yaml",
-    ]
+def _active_config_paths() -> list[Path]:
+    paths = list((ROOT / "configs" / "substrate").glob("**/*.yaml"))
+    paths.extend((ROOT / "configs" / "smoke").glob("*.yaml"))
+    paths.extend((ROOT / "configs" / "stage2").glob("*.yaml"))
     paths.extend(
         path
-        for path in (
-            ROOT
-            / "experiments"
-            / "stage1_starting_points"
-            / "fbt_retrofit"
-            / "configs"
-        ).glob("*.yaml")
-        if not path.name.endswith(".historical.yaml")
+        for path in (LINEAGE / "configs").glob("**/*.yaml")
+        if path.parent.name != "data"
     )
-    paths.extend(
-        (
-            ROOT
-            / "experiments"
-            / "stage2_training"
-            / "protocol_development"
-            / "learning_rate"
-            / "configs"
-        ).glob("**/*.yaml")
-    )
-    paths.extend(
-        (
-            ROOT
-            / "experiments"
-            / "stage2_training"
-            / "protocol_development"
-            / "pass_depth"
-            / "configs"
-        ).glob("*.yaml")
-    )
-    return sorted(set(paths))
+    return sorted(paths)
 
 
-def test_research_stage_layout_is_explicit():
+def test_locked_layout_is_explicit():
+    assert not (ROOT / "configs" / "stage1").exists()
     assert not (ROOT / "configs" / "mac").exists()
+    assert not (ROOT / "experiments" / "stage1_starting_points").exists()
+    assert not (ROOT / "experiments" / "stage2_training").exists()
     assert not (ROOT / "experiments" / "memory_phase_b").exists()
-    assert not (ROOT / "docs" / "EXPERIMENT.md").exists()
 
-    stage1 = ROOT / "configs" / "stage1" / "mac"
-    assert {path.name for path in stage1.glob("*.yaml")} == {
-        "memory_add_wiring.yaml",
-        "memory_tape32_wiring.yaml",
-    }
-
-    stage2 = ROOT / "configs" / "stage2"
-    assert not list(stage2.glob("**/*.yaml"))
-    locked = (
-        ROOT
-        / "experiments"
-        / "stage2_training"
-        / "main"
-        / "LOCKED_PROTOCOL.md"
-    ).read_text(encoding="utf-8")
-    assert "Status: NOT LOCKED" in locked
+    assert (LINEAGE / "README.md").exists()
+    assert (LINEAGE / "PROTOCOL.yaml").exists()
+    assert list((ROOT / "configs" / "stage2").glob("*.yaml"))
 
 
-def test_selected_starting_points_are_pinned():
-    manifest_path = (
-        ROOT / "experiments" / "stage1_starting_points" / "STARTING_POINTS.yaml"
+def test_protocol_is_pinned():
+    manifest = yaml.safe_load((LINEAGE / "PROTOCOL.yaml").read_text(encoding="utf-8"))
+    assert manifest["version"] == 2
+    assert manifest["lineage"] == "stage2_cleanroom_v1"
+    assert manifest["data"]["artifact"] == "data/stage2_cleanroom_v1/sequence_512"
+    assert manifest["starting_points"]["memory_add"]["checkpoint"].startswith(
+        "runs/stage2_cleanroom_v1/"
     )
-    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-    assert manifest["status"] == "selected"
-    models = manifest["models"]
-
-    assert models["memory_add"]["checkpoint"] == (
-        "checkpoints/memory_add_frozen_wired_v1.pt"
+    assert manifest["starting_points"]["memory_tape32"]["checkpoint"].startswith(
+        "runs/stage2_cleanroom_v1/"
     )
-    assert models["memory_add"]["sha256"] == (
-        "62885c820499b987ebf7949b81d6ef0de66e0327f1c9b75d7a865653a046248d"
-    )
-    assert models["memory_tape32"]["checkpoint"] == (
-        "checkpoints/memory_tape32_frozen_wired_v1.pt"
-    )
-    assert models["memory_tape32"]["sha256"] == (
-        "7799bb01bfbe112309007585bae7e9183b7d01d9df4f2454f640b1c126f9964f"
-    )
-    assert models["memory_add"]["backbone_identical_to_vanilla"] is True
-    assert models["memory_tape32"]["backbone_identical_to_vanilla"] is True
-    assert models["fbt"]["status"] == "not_selected_for_main_comparison"
+    assert manifest["locked_protocol"]["backbone_learning_rate"] == 3.0e-7
+    assert manifest["locked_protocol"]["added_learning_rate"] == 1.0e-6
+    assert manifest["locked_protocol"]["passes"] == 3
+    assert manifest["locked_protocol"]["pass_loss_weights"] == [0.05, 0.20, 0.75]
 
 
-def test_all_runnable_research_configs_parse():
-    paths = _experiment_config_paths()
+def test_promoted_k3_configs_use_locked_weights():
+    for path in (ROOT / "configs" / "stage2").glob("*.yaml"):
+        config = load_experiment_config(path)
+        assert config.pass_loss_weights == [0.05, 0.20, 0.75]
+
+
+def test_data_recipe_parses():
+    cfg = load_data_config(LINEAGE / "configs" / "data" / "artifact.yaml")
+    assert cfg.output_dir == "data/stage2_cleanroom_v1/sequence_512"
+    assert cfg.train_tokens == 1_048_576
+    assert cfg.validation_tokens == 131_072
+
+
+def test_all_active_experiment_configs_parse():
+    paths = _active_config_paths()
     assert paths
     for path in paths:
         load_experiment_config(path)
 
 
-def test_stage2_k3_configs_are_development_not_canonical():
-    base = (
-        ROOT
-        / "experiments"
-        / "stage2_training"
-        / "protocol_development"
-        / "pass_depth"
-        / "configs"
+def test_config_and_run_namespaces_are_current():
+    roots = [ROOT / "configs", LINEAGE]
+    text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for root in roots
+        for path in root.glob("**/*.yaml")
     )
-    for variant in ("memory_add", "memory_tape32"):
-        short = load_experiment_config(base / f"{variant}_k3_262k.yaml")
-        continuation = load_experiment_config(base / f"{variant}_k3_continue_1m.yaml")
-        assert short.normalized_pass_schedule() == [
-            {"until_tokens": None, "probabilities": {3: 1.0}}
-        ]
-        assert short.pass_loss_weights == [0.1, 0.3, 0.6]
-        assert short.max_unique_tokens == 262_144
-        assert short.resume_from is None
-        assert "selected-lr1e-7-long" in (short.init_from or "")
-
-        assert continuation.max_unique_tokens == 1_048_576
-        assert continuation.init_from is None
-        assert continuation.resume_from == (
-            f"runs/mac-{variant.replace('_', '-')}-phase-b-k3-short/latest.pt"
-        )
+    assert "runs/mac-" not in text
+    assert "runs/cleanroom-v1" not in text

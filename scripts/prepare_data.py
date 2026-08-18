@@ -10,7 +10,11 @@ from tiny_mistral_mptt.data.dolmino import prepare_dolmino
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Materialize a deterministic local Dolmino token artifact.")
-    parser.add_argument("--config", default="configs/data/dolmino_dev_512.yaml")
+    parser.add_argument(
+        "--config",
+        default="experiments/stage2_cleanroom_v1/configs/data/artifact.yaml",
+        help="data recipe YAML; defaults to the Stage 2 clean-room recipe",
+    )
     args = parser.parse_args()
     cfg = load_data_config(args.config)
     manifest = prepare_dolmino(

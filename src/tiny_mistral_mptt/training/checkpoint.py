@@ -11,6 +11,7 @@ import torch
 
 _DEFAULT_EXPERIMENT_FIELDS = {
     "prefix_mixin_probability": 0.0,
+    "pass_loss_weights_by_k": None,
 }
 
 # These one-off FBT calibration controls existed in format-v2 checkpoints but
@@ -86,6 +87,10 @@ def _resume_config_view(config: dict) -> dict:
     # ``max_unique_tokens`` is a stopping budget, so allowing it to increase is
     # what makes an exact frozen-phase continuation possible.
     ignored = {
+        # Local paths are relocatable; the manifest and strict model-state
+        # checks provide the actual data/model identity guarantees.
+        "model_dir",
+        "data_dir",
         "output_dir",
         "resume_from",
         "max_unique_tokens",

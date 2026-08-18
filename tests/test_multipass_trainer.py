@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import torch
@@ -183,7 +184,11 @@ def test_mixed_pass_schedule_resume_is_bit_exact(tmp_path):
         grad_accum_steps=1,
         max_unique_tokens=64,
         pass_schedule=[{"probabilities": {1: 0.4, 2: 0.4, 3: 0.2}}],
-        pass_loss_weights=[0.05, 0.20, 0.75],
+        pass_loss_weights_by_k={
+            1: [1.0],
+            2: [0.25, 0.75],
+            3: [0.05, 0.20, 0.75],
+        },
         pretrained_learning_rate=1e-4,
         added_learning_rate=1e-4,
         lr_schedule={"type": "constant"},
@@ -232,6 +237,65 @@ def test_mixed_pass_schedule_resume_is_bit_exact(tmp_path):
     assert resumed_state == full_state
     for name, tensor in full.state_dict().items():
         torch.testing.assert_close(tensor, resumed.state_dict()[name], atol=0, rtol=0)
+
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "full" / "metrics.jsonl").read_text().splitlines()
+    ]
+    train_records = [record for record in records if record["event"] == "train"]
+    assert train_records
+    final_histogram = train_records[-1]["pass_histogram"]
+    assert sum(final_histogram.values()) == train_records[-1]["pass_samples"]
+    assert set(final_histogram) <= {"1", "2", "3"}
+
+
+def test_mixed_pass_schedule_forwards_k_specific_weights(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data-k-weights"
+    make_artifact(data_dir)
+    train = PackedTokenDataset(data_dir, "train")
+    val = PackedTokenDataset(data_dir, "validation")
+    model = make_fbt(seed=91)
+    observed = []
+    original_compute_loss = model.compute_loss
+
+    def traced_compute_loss(input_ids, **kwargs):
+        observed.append((kwargs["passes"], tuple(kwargs["loss_weights"])))
+        return original_compute_loss(input_ids, **kwargs)
+
+    monkeypatch.setattr(model, "compute_loss", traced_compute_loss)
+    cfg = ExperimentConfig(
+        variant="fbt",
+        phase="B",
+        model_dir="unused",
+        data_dir=str(data_dir),
+        output_dir=str(tmp_path / "run-k-weights"),
+        device="cpu",
+        attention_backend="reference",
+        seed=15,
+        max_unique_tokens=64,
+        pass_schedule=[{"probabilities": {2: 0.5, 3: 0.5}}],
+        pass_loss_weights_by_k={
+            2: [0.25, 0.75],
+            3: [0.05, 0.20, 0.75],
+        },
+        eval_every_tokens=0,
+        eval_batches=0,
+        checkpoint_every_tokens=0,
+    )
+    Trainer(
+        model=model,
+        config=cfg,
+        train_data=train,
+        validation_data=val,
+        device=torch.device("cpu"),
+    ).train()
+
+    assert observed
+    expected = {
+        2: (0.25, 0.75),
+        3: (0.05, 0.20, 0.75),
+    }
+    assert all(weights == expected[passes] for passes, weights in observed)
 
 
 def test_memory_tape_phase_a_runs_through_shared_trainer(tmp_path):

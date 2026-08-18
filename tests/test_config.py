@@ -24,5 +24,5 @@ def test_config_roundtrip(tmp_path):
 
 def test_checked_in_checkpoint_config_snapshot_matches_factory():
     from pathlib import Path
-    path = Path(__file__).parents[1] / "configs" / "TinyMistral-248M-v3.config.json"
+    path = Path(__file__).parents[1] / "configs" / "tinymistral_248m_base.json"
     assert MistralConfig.from_json_file(path) == tiny_mistral_248m_config()

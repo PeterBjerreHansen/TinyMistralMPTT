@@ -1,7 +1,7 @@
 variant: vanilla
 model_dir: checkpoints/TinyMistral-248M-v3
 data_dir: data/dolmino/gpu_2048
-output_dir: runs/gpu-vanilla
+output_dir: runs/substrate/gpu/vanilla
 device: cuda
 dtype: bfloat16
 attention_backend: auto

@@ -9,6 +9,7 @@ implementation derived from:
 - validated model-source commit: `e44420d4190b6cfc1dc002c0ac67e364ef2f2de1`
 - target checkpoint: `M4-ai/TinyMistral-248M-v3`
 - checkpoint revision: `5afbc96ddc964c68282cd970ef49e8d1a5e81c52`
+- local checkpoint path: `checkpoints/TinyMistral-248M-v3`
 - Transformers architecture oracle: `4.45.2`
 
 The research infrastructure must not modify vanilla behavior silently. Baseline

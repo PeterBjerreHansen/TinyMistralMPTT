@@ -33,6 +33,28 @@ def _coerce_pass_probabilities(raw: Any) -> dict[int, float]:
     return {passes: probability / total for passes, probability in sorted(result.items())}
 
 
+def _coerce_pass_loss_weights_by_k(raw: Any) -> dict[int, list[float]]:
+    if not isinstance(raw, dict) or not raw:
+        raise ValueError("pass_loss_weights_by_k must be a non-empty mapping")
+    result: dict[int, list[float]] = {}
+    for key, values in raw.items():
+        try:
+            passes = int(key)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid pass-loss weight K {key!r}") from exc
+        if passes < 1:
+            raise ValueError("pass-loss weight K values must be positive")
+        if not isinstance(values, (list, tuple)) or not values:
+            raise ValueError(f"pass_loss_weights_by_k[{passes}] must be a non-empty list")
+        weights = [float(value) for value in values]
+        if any(not math.isfinite(value) or value < 0 for value in weights):
+            raise ValueError("pass-loss weights must be finite and non-negative")
+        if sum(weights) <= 0:
+            raise ValueError(f"pass_loss_weights_by_k[{passes}] must contain positive mass")
+        result[passes] = weights
+    return dict(sorted(result.items()))
+
+
 def normalize_pass_schedule(raw: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     """Validate and normalize a token-indexed pass-count schedule.
 
@@ -117,8 +139,8 @@ def validate_lr_schedule(raw: dict[str, Any] | None) -> None:
 class ExperimentConfig:
     variant: str = "vanilla"
     model_dir: str = "checkpoints/TinyMistral-248M-v3"
-    data_dir: str = "data/dolmino/dev_512"
-    output_dir: str = "runs/vanilla-dev"
+    data_dir: str = "data/stage2_cleanroom_v1/sequence_512"
+    output_dir: str = "runs/dev/vanilla"
     device: str = "auto"
     dtype: str = "float32"
     attention_backend: str = "auto"
@@ -148,6 +170,7 @@ class ExperimentConfig:
     phase: str = "B"
     pass_schedule: list[dict[str, Any]] | None = None
     pass_loss_weights: list[float] | None = None
+    pass_loss_weights_by_k: dict[int, list[float]] | None = None
     memory_window: int = 32
     prefix_mixin_probability: float = 0.0
 
@@ -155,6 +178,12 @@ class ExperimentConfig:
     # only and begins a fresh trajectory/optimizer/data schedule.
     resume_from: str | None = None
     init_from: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.pass_loss_weights_by_k is not None:
+            self.pass_loss_weights_by_k = _coerce_pass_loss_weights_by_k(
+                self.pass_loss_weights_by_k
+            )
 
     def normalized_pass_schedule(self) -> list[dict[str, Any]]:
         return normalize_pass_schedule(self.pass_schedule)
@@ -166,6 +195,18 @@ class ExperimentConfig:
     @property
     def added_lr(self) -> float:
         return self.learning_rate if self.added_learning_rate is None else float(self.added_learning_rate)
+
+    def loss_weights_for_passes(self, passes: int) -> list[float] | None:
+        if passes < 1:
+            raise ValueError("passes must be positive")
+        if self.pass_loss_weights_by_k is not None:
+            try:
+                return self.pass_loss_weights_by_k[passes]
+            except KeyError as exc:
+                raise ValueError(
+                    f"no pass-loss weights configured for sampled K={passes}"
+                ) from exc
+        return self.pass_loss_weights
 
     def validate(self) -> None:
         if self.variant not in SUPPORTED_VARIANTS:
@@ -220,6 +261,10 @@ class ExperimentConfig:
             raise ValueError("vanilla has no Phase-A parameters")
         if self.phase == "A" and any(passes < 2 for passes in pass_counts):
             raise ValueError("Phase A for multipass variants requires at least two passes on every batch")
+        if self.pass_loss_weights is not None and self.pass_loss_weights_by_k is not None:
+            raise ValueError(
+                "pass_loss_weights and pass_loss_weights_by_k are mutually exclusive"
+            )
         if self.pass_loss_weights is not None:
             if not self.pass_loss_weights:
                 raise ValueError("pass_loss_weights must not be empty")
@@ -228,6 +273,13 @@ class ExperimentConfig:
                 raise ValueError("pass_loss_weights must be finite and non-negative")
             if sum(weights) <= 0:
                 raise ValueError("pass_loss_weights must contain positive mass")
+        if self.pass_loss_weights_by_k is not None:
+            configured = set(self.pass_loss_weights_by_k)
+            if configured != pass_counts:
+                raise ValueError(
+                    "pass_loss_weights_by_k keys must exactly match sampled pass counts "
+                    f"{sorted(pass_counts)}; got {sorted(configured)}"
+                )
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "ExperimentConfig":

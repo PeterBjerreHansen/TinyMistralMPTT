@@ -1,16 +1,9 @@
-# Stage 2 locked configurations
+# Stage 2 main configurations
 
-This directory is intentionally empty of model-training YAMLs while the Stage 2
-training protocol is still under development.
+These are the locked K=3 main-run entry points:
 
-Development configs live under `experiments/stage2_training/protocol_development/`.
-After pass depth, loss weighting, data scale, and other protocol choices are
-locked, the three principal configs will be promoted here:
+- `memory_add_k3.yaml`
+- `memory_tape32_k3.yaml`
 
-- `mac/vanilla.yaml`
-- `mac/memory_add.yaml`
-- `mac/memory_tape32.yaml`
-
-The main-run configs must start from the canonical Stage 1 starting points in
-`experiments/stage1_starting_points/STARTING_POINTS.yaml`. A development
-checkpoint is never promoted implicitly just because it is the newest model.
+Controls and protocol-development arms remain under
+`experiments/stage2_cleanroom_v1/`.

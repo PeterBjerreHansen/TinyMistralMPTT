@@ -35,7 +35,7 @@ Examples:
 ```yaml
 pass_loss_weights: [0.0, 1.0]
 pass_loss_weights: [0.25, 0.75]
-pass_loss_weights: [0.1, 0.3, 0.6]
+pass_loss_weights: [0.05, 0.20, 0.75]
 ```
 
 `null` means uniform weighting.

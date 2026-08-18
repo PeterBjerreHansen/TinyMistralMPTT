@@ -48,14 +48,11 @@ For MemoryAdd and MemoryTape32:
 
 The repository structure is also part of reproducibility:
 
-- canonical Stage 1 wiring configs live under `configs/stage1/`;
-- selected Stage 1 checkpoint hashes live in
-  `experiments/stage1_starting_points/STARTING_POINTS.yaml`;
-- Stage 2 development configs live under `experiments/stage2_training/`;
-- no Stage 2 model config is promoted into `configs/stage2/` while
-  `LOCKED_PROTOCOL.md` says `NOT LOCKED`;
-- historical FBT calibrated-init YAML is excluded from normal config parsing
-  because its one-off fields were retired from the stable API.
+- the locked lineage is `experiments/stage2_cleanroom_v1/`;
+- canonical Stage 2 configs are under `configs/stage2/`;
+- generated outputs mirror their config paths under `runs/`;
+- configs point only to the current checkpoint and data namespaces;
+- protocol and result records use the same descriptive names as their configs.
 
 These invariants are checked by `tests/test_experiment_layout.py`.
 
@@ -69,7 +66,7 @@ uv run python -m compileall -q src scripts tests experiments
 On Apple hardware also run:
 
 ```bash
-uv run python scripts/mps_smoke.py
+uv run python scripts/smoke_mps.py
 ```
 
 ## CUDA gate

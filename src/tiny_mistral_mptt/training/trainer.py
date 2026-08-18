@@ -202,6 +202,15 @@ class Trainer:
             data_manifest_sha256=self.manifest_sha256,
         )
 
+    def _pass_schedule_metrics(self) -> dict[str, object]:
+        return {
+            "pass_samples": self.pass_scheduler.samples,
+            "pass_histogram": {
+                str(passes): count
+                for passes, count in sorted(self.pass_scheduler.histogram.items())
+            },
+        }
+
     def _evaluate(self) -> dict:
         if self.config.eval_passes > 1:
             if not isinstance(self.model, MultiPassVariant):
@@ -226,6 +235,7 @@ class Trainer:
                 "nll_by_source_by_pass": list(result.nll_by_source_by_pass),
                 "validation_blocks": result.blocks,
                 "eval_passes": result.passes,
+                **self._pass_schedule_metrics(),
             }
         else:
             result = evaluate_nll(
@@ -244,6 +254,7 @@ class Trainer:
                 "nll_by_source": result.nll_by_source,
                 "validation_blocks": result.blocks,
                 "eval_passes": 1,
+                **self._pass_schedule_metrics(),
             }
         _append_jsonl(self.metrics_path, record)
         return record
@@ -285,7 +296,7 @@ class Trainer:
                     ids,
                     phase=cfg.phase,
                     passes=passes,
-                    loss_weights=cfg.pass_loss_weights,
+                    loss_weights=cfg.loss_weights_for_passes(passes),
                 )
                 if not bool(torch.isfinite(output.loss).item()):
                     raise RuntimeError("non-finite training loss")
@@ -316,6 +327,7 @@ class Trainer:
                 "grad_norm": float(grad_norm.detach().cpu()),
                 "tokens_per_second": (tokens_per_micro * accumulation_steps) / elapsed,
                 "mean_passes": update_passes / accumulation_steps,
+                **self._pass_schedule_metrics(),
                 **lr_record,
             }
             record.update(
