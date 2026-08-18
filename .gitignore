@@ -12,10 +12,14 @@ artifacts/
 *.pth
 *.safetensors
 .DS_Store
-data/
+data/*
+!data/dolmino/
+data/dolmino/*
+!data/dolmino/local_2048/
+data/dolmino/local_2048/*
+!data/dolmino/local_2048/config.yaml
+!data/dolmino/gpu_2048/
+data/dolmino/gpu_2048/*
+!data/dolmino/gpu_2048/config.yaml
 runs/
 .coverage
-
-# The clean-room data recipe is source provenance, not generated data.
-!experiments/stage2_cleanroom_v1/configs/data/
-!experiments/stage2_cleanroom_v1/configs/data/artifact.yaml

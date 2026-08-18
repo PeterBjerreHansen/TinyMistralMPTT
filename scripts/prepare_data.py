@@ -12,8 +12,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Materialize a deterministic local Dolmino token artifact.")
     parser.add_argument(
         "--config",
-        default="experiments/stage2_cleanroom_v1/configs/data/artifact.yaml",
-        help="data recipe YAML; defaults to the Stage 2 clean-room recipe",
+        default="data/dolmino/local_2048/config.yaml",
+        help="data recipe beside the artifact; defaults to the active local 2048-token recipe",
     )
     args = parser.parse_args()
     cfg = load_data_config(args.config)

@@ -1,0 +1,30 @@
+variant: memory_add
+phase: B
+model_dir: checkpoints/TinyMistral-248M-v3
+data_dir: data/dolmino/local_2048
+output_dir: benchmarks/development/k_selection/results/memory_add_k3
+device: mps
+dtype: float32
+attention_backend: auto
+seed: 1337
+architecture_seed: 4242
+batch_size: 1
+grad_accum_steps: 1
+max_unique_tokens: 262144
+learning_rate: 1.0e-6
+pretrained_learning_rate: 1.0e-6
+added_learning_rate: 1.0e-6
+lr_schedule:
+  type: constant
+weight_decay: 0.01
+grad_clip: 1.0
+pass_schedule:
+  - probabilities:
+      3: 1.0
+pass_loss_weights: [0.05, 0.20, 0.75]
+eval_every_tokens: 262144
+eval_batches: 16
+eval_passes: 8
+checkpoint_every_tokens: 262144
+resume_from: null
+init_from: benchmarks/development/wiring/results/memory_add/latest.pt

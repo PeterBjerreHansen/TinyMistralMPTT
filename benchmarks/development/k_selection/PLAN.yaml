@@ -1,0 +1,23 @@
+name: k_selection
+status: development
+data_artifact: data/dolmino/local_2048
+unique_tokens: 1048576
+backbone_learning_rate: 1.0e-6
+added_learning_rate: 1.0e-6
+arms:
+  - id: k2
+    probabilities: {2: 1.0}
+    pass_loss_weights: [0.25, 0.75]
+  - id: k2_90_k3_10
+    probabilities: {2: 0.9, 3: 0.1}
+    pass_loss_weights_by_k:
+      2: [0.25, 0.75]
+      3: [0.05, 0.20, 0.75]
+  - id: k2_50_k3_50
+    probabilities: {2: 0.5, 3: 0.5}
+    pass_loss_weights_by_k:
+      2: [0.25, 0.75]
+      3: [0.05, 0.20, 0.75]
+  - id: k3
+    probabilities: {3: 1.0}
+    pass_loss_weights: [0.05, 0.20, 0.75]

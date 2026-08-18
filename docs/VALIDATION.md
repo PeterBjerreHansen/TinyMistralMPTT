@@ -1,7 +1,7 @@
 # Validation gates
 
 This file records durable correctness gates for the codebase. Experimental
-results and protocol decisions live under `experiments/`.
+results and protocol decisions live under `benchmarks/`.
 
 ## Vanilla substrate
 
@@ -44,15 +44,21 @@ For MemoryAdd and MemoryTape32:
 - absolute cache positions remain correct beyond the self-attention sliding
   window.
 
-## Experiment-layout gates
+## Benchmark-layout gates
 
 The repository structure is also part of reproducibility:
 
-- the current clean-room lineage is `experiments/stage2_cleanroom_v1/`;
-- canonical Stage 2 configs move under `configs/stage2/` only after the
+- historical clean-room result records are retained under
+  `benchmarks/historical/stage2_cleanroom_v1/results/`, without runnable configs or
+  generated checkpoints;
+- reusable substrate and smoke controls live under `benchmarks/controls/`;
+- development configs and reports live together under `benchmarks/development/`;
+- ad-hoc diagnostics live under `benchmarks/ad_hoc/`;
+- core configs and reports live together under `benchmarks/core/` after the
   protocol is explicitly locked;
-- generated outputs mirror their config paths under `runs/`;
-- configs point only to the current checkpoint and data namespaces;
+- generated outputs live in the corresponding experiment `results/` directory;
+- active benchmark and data recipes point only to the current checkpoint and
+  data namespaces;
 - protocol and result records use the same descriptive names as their configs.
 
 These invariants are checked by `tests/test_experiment_layout.py`.
@@ -61,7 +67,7 @@ These invariants are checked by `tests/test_experiment_layout.py`.
 
 ```bash
 uv run pytest -q
-uv run python -m compileall -q src scripts tests experiments
+uv run python -m compileall -q src scripts tests benchmarks
 ```
 
 On Apple hardware also run:

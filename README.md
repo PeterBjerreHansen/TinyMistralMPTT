@@ -5,10 +5,9 @@ validated TinyMistral backbone.
 
 ## Read first
 
-- `configs/`: canonical runnable configs.
-- `experiments/stage2_cleanroom_v1/`: complete protocol lineage, controls, and
-  results.
-- `runs/`: generated checkpoints and metrics; ignored by Git.
+- `benchmarks/`: controls, historical, development, ad-hoc, core, and efficiency studies.
+- `data/`: dataset recipes beside generated data artifacts.
+- `benchmarks/**/results/`: experiment-local metrics and reports.
 - `docs/`: durable implementation and provenance contracts.
 - `src/tiny_mistral/`: validated vendored vanilla implementation.
 - `src/tiny_mistral_mptt/`: research models, training, evaluation, and inference.
@@ -21,37 +20,38 @@ version. The upstream revision is pinned in `docs/UPSTREAMS.md`.
 
 The Stage 2 protocol remains open. E2 selected `1e-6` for both backbone and
 added parameters, and the completed 512-token K sweep makes K=2 the provisional
-winner. The K schedule is intentionally still pending while context-length and
-efficiency qualification are underway; no 100M-token main campaign is locked.
+winner within that historical clean-room lineage. The active pre-lock evidence
+uses the canonical 2048-token data recipe; the K schedule is intentionally still
+pending and no 100M-token main campaign is locked.
 
 The active evidence is documented in:
 
 ```text
-experiments/stage2_cleanroom_v1/results/k_sweep.md
-experiments/stage2_cleanroom_v1/PROTOCOL.yaml
+benchmarks/historical/stage2_cleanroom_v1/results/k_sweep.md
+benchmarks/development/k_selection/results/baseline_2048.md
 ```
 
-Do not start a main Stage 2 run from `configs/stage2/` until the context
-qualification is complete and the protocol is explicitly relocked.
+Do not start a core Stage 2 run until the development protocol is explicitly
+relocked.
 
 ## Validate
 
 ```bash
 uv sync --extra data --extra eval
 uv run pytest -q
-uv run python -m compileall -q src scripts tests experiments
+uv run python -m compileall -q src scripts tests benchmarks
 git diff --check
 ```
 
-Prepare and verify the clean-room data artifact:
+Prepare and verify the active 2048-token data artifact:
 
 ```bash
 uv run python scripts/prepare_data.py
-uv run python scripts/verify_data.py data/stage2_cleanroom_v1/sequence_512
+uv run python scripts/verify_data.py data/dolmino/local_2048
 ```
 
 Run the engineering efficiency battery on the local accelerator with the
-targets in `efficiency_benchmarks/`. These measurements are separate from the
+targets in `benchmarks/efficiency/`. These measurements are separate from the
 scientific experiment record.
 
 The CUDA substrate config and `docs/CLOUD.md` describe the paid-run preflight

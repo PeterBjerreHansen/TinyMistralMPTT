@@ -5,6 +5,15 @@ step converts a small, pinned slice of `allenai/dolmino-mix-1124` into an exact
 local token artifact. Every later architecture will therefore see the same token
 IDs in the same block order.
 
+The versioned preparation recipes live beside their artifacts:
+
+```text
+data/dolmino/local_2048/config.yaml
+data/dolmino/gpu_2048/config.yaml
+```
+
+The generated token files and manifest remain local data and are ignored by Git.
+
 ## Published 50B recipe
 
 The upstream percentages are rounded and sum to 100.01%, so the materializer

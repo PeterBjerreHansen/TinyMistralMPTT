@@ -4,7 +4,7 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SUITES = ROOT / "efficiency_benchmarks" / "suites"
+SUITES = ROOT / "benchmarks" / "efficiency" / "suites"
 
 
 def _suite(path: Path) -> dict:
@@ -20,7 +20,7 @@ def test_efficiency_suites_are_explicit_and_non_scientific():
         "precision_cuda.yaml",
     }
     assert {path.name for path in SUITES.glob("*.yaml")} == expected
-    assert (ROOT / "efficiency_benchmarks" / "README.md").exists()
+    assert (ROOT / "benchmarks" / "efficiency" / "README.md").exists()
 
 
 def test_efficiency_suite_cases_have_required_dimensions():

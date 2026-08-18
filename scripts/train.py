@@ -28,10 +28,14 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_experiment_config(args.config)
+    if args.resume_from is not None and args.init_from is not None:
+        parser.error("--resume-from and --init-from are mutually exclusive")
     if args.resume_from is not None:
         cfg.resume_from = args.resume_from
-    if args.init_from is not None:
+        cfg.init_from = None
+    elif args.init_from is not None:
         cfg.init_from = args.init_from
+        cfg.resume_from = None
     cfg.validate()
 
     device = resolve_device(cfg.device)

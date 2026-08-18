@@ -1,0 +1,16 @@
+name: training_efficiency
+defaults:
+  device: auto
+  model_dir: checkpoints/TinyMistral-248M-v3
+  parameter_dtype: float32
+  autocast_dtype: null
+  attention_backend: auto
+  warmup_steps: 1
+  measure_steps: 3
+  batch_size: 1
+cases:
+  - {variant: vanilla, passes: 1, sequence_length: 2048}
+  - {variant: memory_add, passes: 2, sequence_length: 2048}
+  - {variant: memory_add, passes: 3, sequence_length: 2048}
+  - {variant: memory_tape32, passes: 2, sequence_length: 2048}
+  - {variant: memory_tape32, passes: 3, sequence_length: 2048}

@@ -19,7 +19,7 @@ from tiny_mistral_mptt.model_factory import load_variant
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run a checked-in lm-evaluation-harness suite.")
     parser.add_argument("--config", required=True)
-    parser.add_argument("--suite", default="configs/evaluation/quick.yaml")
+    parser.add_argument("--suite", default="benchmarks/ad_hoc/lm_evaluation/quick.yaml")
     parser.add_argument("--checkpoint", default=None)
     parser.add_argument("--limit", type=float, default=None)
     parser.add_argument("--output", default=None)

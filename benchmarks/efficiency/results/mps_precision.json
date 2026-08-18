@@ -1,0 +1,238 @@
+{
+  "overrides": {
+    "autocast_dtype": null,
+    "device": null
+  },
+  "results": [
+    {
+      "actual_parameter_dtypes": [
+        "float32"
+      ],
+      "allocated_bytes_after_measurement": 5125731840,
+      "attention_backend": "auto",
+      "autocast_dtype": null,
+      "batch_size": 1,
+      "bf16_supported": null,
+      "device": "mps",
+      "device_name": "Apple MPS",
+      "driver_allocated_bytes_after_measurement": 11136614400,
+      "elapsed_seconds": 3.775824041920714,
+      "estimated_hours_per_100m_unique_tokens": 17.07096373119536,
+      "gradient_dtypes": [
+        "float32"
+      ],
+      "mean_grad_norm": 5.5806050300598145,
+      "mean_loss": 12.847740173339844,
+      "measure_steps": 3,
+      "milliseconds_per_step": 1258.6080139735714,
+      "optimizer_state_dtypes": [
+        "float32"
+      ],
+      "parameter_dtype": "float32",
+      "pass_tokens_per_second": 1627.194469812906,
+      "passes": 1,
+      "peak_allocated_bytes": null,
+      "peak_reserved_bytes": null,
+      "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+      "python": "3.13.15",
+      "sequence_length": 2048,
+      "status": "ok",
+      "torch": "2.13.0",
+      "unique_tokens_per_second": 1627.194469812906,
+      "variant": "vanilla",
+      "warmup_steps": 1
+    },
+    {
+      "actual_parameter_dtypes": [
+        "float32"
+      ],
+      "allocated_bytes_after_measurement": 4898087168,
+      "attention_backend": "auto",
+      "autocast_dtype": "bfloat16",
+      "batch_size": 1,
+      "bf16_supported": null,
+      "device": "mps",
+      "device_name": "Apple MPS",
+      "driver_allocated_bytes_after_measurement": 10071261184,
+      "elapsed_seconds": 4.4338666659314185,
+      "estimated_hours_per_100m_unique_tokens": 20.04605516642894,
+      "gradient_dtypes": [
+        "float32"
+      ],
+      "mean_grad_norm": 5.53083594640096,
+      "mean_loss": 12.919641812642416,
+      "measure_steps": 3,
+      "milliseconds_per_step": 1477.9555553104728,
+      "optimizer_state_dtypes": [
+        "float32"
+      ],
+      "parameter_dtype": "float32",
+      "pass_tokens_per_second": 1385.697961377315,
+      "passes": 1,
+      "peak_allocated_bytes": null,
+      "peak_reserved_bytes": null,
+      "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+      "python": "3.13.15",
+      "sequence_length": 2048,
+      "status": "ok",
+      "torch": "2.13.0",
+      "unique_tokens_per_second": 1385.697961377315,
+      "variant": "vanilla",
+      "warmup_steps": 1
+    },
+    {
+      "actual_parameter_dtypes": [
+        "float32"
+      ],
+      "allocated_bytes_after_measurement": 5378717184,
+      "attention_backend": "auto",
+      "autocast_dtype": null,
+      "batch_size": 1,
+      "bf16_supported": null,
+      "device": "mps",
+      "device_name": "Apple MPS",
+      "driver_allocated_bytes_after_measurement": 15498690560,
+      "elapsed_seconds": 6.03123579104431,
+      "estimated_hours_per_100m_unique_tokens": 27.26795695459124,
+      "gradient_dtypes": [
+        "float32"
+      ],
+      "mean_grad_norm": 80.9355977376302,
+      "mean_loss": 12.72853914896647,
+      "measure_steps": 3,
+      "milliseconds_per_step": 2010.4119303481032,
+      "optimizer_state_dtypes": [
+        "float32"
+      ],
+      "parameter_dtype": "float32",
+      "pass_tokens_per_second": 2037.393400909025,
+      "passes": 2,
+      "peak_allocated_bytes": null,
+      "peak_reserved_bytes": null,
+      "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+      "python": "3.13.15",
+      "sequence_length": 2048,
+      "status": "ok",
+      "torch": "2.13.0",
+      "unique_tokens_per_second": 1018.6967004545126,
+      "variant": "memory_add",
+      "warmup_steps": 1
+    },
+    {
+      "actual_parameter_dtypes": [
+        "float32"
+      ],
+      "allocated_bytes_after_measurement": 4262514944,
+      "attention_backend": "auto",
+      "autocast_dtype": "bfloat16",
+      "batch_size": 1,
+      "bf16_supported": null,
+      "device": "mps",
+      "device_name": "Apple MPS",
+      "driver_allocated_bytes_after_measurement": 14399782912,
+      "elapsed_seconds": 6.898383583989926,
+      "estimated_hours_per_100m_unique_tokens": 31.188438512685934,
+      "gradient_dtypes": [
+        "float32"
+      ],
+      "mean_grad_norm": 78.6810531616211,
+      "mean_loss": 12.802809397379557,
+      "measure_steps": 3,
+      "milliseconds_per_step": 2299.4611946633086,
+      "optimizer_state_dtypes": [
+        "float32"
+      ],
+      "parameter_dtype": "float32",
+      "pass_tokens_per_second": 1781.2868551581466,
+      "passes": 2,
+      "peak_allocated_bytes": null,
+      "peak_reserved_bytes": null,
+      "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+      "python": "3.13.15",
+      "sequence_length": 2048,
+      "status": "ok",
+      "torch": "2.13.0",
+      "unique_tokens_per_second": 890.6434275790733,
+      "variant": "memory_add",
+      "warmup_steps": 1
+    },
+    {
+      "actual_parameter_dtypes": [
+        "float32"
+      ],
+      "allocated_bytes_after_measurement": 6252660224,
+      "attention_backend": "auto",
+      "autocast_dtype": null,
+      "batch_size": 1,
+      "bf16_supported": null,
+      "device": "mps",
+      "device_name": "Apple MPS",
+      "driver_allocated_bytes_after_measurement": 26412302336,
+      "elapsed_seconds": 14.5543835000135,
+      "estimated_hours_per_100m_unique_tokens": 65.802153410796,
+      "gradient_dtypes": [
+        "float32"
+      ],
+      "mean_grad_norm": 6.040482838948567,
+      "mean_loss": 12.805940310160318,
+      "measure_steps": 3,
+      "milliseconds_per_step": 4851.461166671167,
+      "optimizer_state_dtypes": [
+        "float32"
+      ],
+      "parameter_dtype": "float32",
+      "pass_tokens_per_second": 1266.422586706122,
+      "passes": 3,
+      "peak_allocated_bytes": null,
+      "peak_reserved_bytes": null,
+      "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+      "python": "3.13.15",
+      "sequence_length": 2048,
+      "status": "ok",
+      "torch": "2.13.0",
+      "unique_tokens_per_second": 422.140862235374,
+      "variant": "memory_tape32",
+      "warmup_steps": 1
+    },
+    {
+      "actual_parameter_dtypes": [
+        "float32"
+      ],
+      "allocated_bytes_after_measurement": 4584575232,
+      "attention_backend": "auto",
+      "autocast_dtype": "bfloat16",
+      "batch_size": 1,
+      "bf16_supported": null,
+      "device": "mps",
+      "device_name": "Apple MPS",
+      "driver_allocated_bytes_after_measurement": 18929664000,
+      "elapsed_seconds": 11.591657416080125,
+      "estimated_hours_per_100m_unique_tokens": 52.40730530273494,
+      "gradient_dtypes": [
+        "float32"
+      ],
+      "mean_grad_norm": 6.371514797210693,
+      "mean_loss": 12.951576550801596,
+      "measure_steps": 3,
+      "milliseconds_per_step": 3863.8858053600416,
+      "optimizer_state_dtypes": [
+        "float32"
+      ],
+      "parameter_dtype": "float32",
+      "pass_tokens_per_second": 1590.1091050560938,
+      "passes": 3,
+      "peak_allocated_bytes": null,
+      "peak_reserved_bytes": null,
+      "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+      "python": "3.13.15",
+      "sequence_length": 2048,
+      "status": "ok",
+      "torch": "2.13.0",
+      "unique_tokens_per_second": 530.0363683520312,
+      "variant": "memory_tape32",
+      "warmup_steps": 1
+    }
+  ],
+  "suite": "mps_fp32_vs_bf16_2048",
+  "suite_path": "benchmarks/efficiency/suites/precision_mps.yaml"
+}

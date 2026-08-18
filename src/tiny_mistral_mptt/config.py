@@ -140,8 +140,8 @@ def validate_lr_schedule(raw: dict[str, Any] | None) -> None:
 class ExperimentConfig:
     variant: str = "vanilla"
     model_dir: str = "checkpoints/TinyMistral-248M-v3"
-    data_dir: str = "data/stage2_cleanroom_v1/sequence_512"
-    output_dir: str = "runs/dev/vanilla"
+    data_dir: str = "data/dolmino/local_2048"
+    output_dir: str = "benchmarks/controls/smoke/results/vanilla"
     device: str = "auto"
     dtype: str = "float32"
     autocast_dtype: str | None = None

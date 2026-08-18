@@ -29,3 +29,14 @@ def test_preparation_config_requires_exact_block_multiple():
 
     with pytest.raises(ValueError, match="multiples"):
         DataPreparationConfig(sequence_length=512, train_tokens=1000, validation_tokens=512).validate()
+
+
+def test_default_preparation_config_uses_active_2048_context():
+    from tiny_mistral_mptt.data.config import DataPreparationConfig
+
+    cfg = DataPreparationConfig()
+    assert cfg.output_dir == "data/dolmino/local_2048"
+    assert cfg.sequence_length == 2048
+    assert cfg.train_tokens == 1_048_576
+    assert cfg.validation_tokens == 131_072
+    cfg.validate()

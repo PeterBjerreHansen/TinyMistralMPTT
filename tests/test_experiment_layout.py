@@ -7,97 +7,100 @@ from tiny_mistral_mptt.data.config import load_data_config
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LINEAGE = ROOT / "experiments" / "stage2_cleanroom_v1"
+HISTORICAL_RESULTS = ROOT / "benchmarks" / "historical" / "stage2_cleanroom_v1" / "results"
 
 
 def _active_config_paths() -> list[Path]:
-    paths = list((ROOT / "configs" / "substrate").glob("**/*.yaml"))
-    paths.extend((ROOT / "configs" / "smoke").glob("*.yaml"))
-    paths.extend((ROOT / "configs" / "stage2").glob("*.yaml"))
+    paths = list((ROOT / "benchmarks" / "controls" / "substrate").glob("*.yaml"))
+    paths.extend((ROOT / "benchmarks" / "controls" / "smoke").glob("*.yaml"))
     paths.extend(
         path
-        for path in (LINEAGE / "configs").glob("**/*.yaml")
-        if path.parent.name != "data"
+        for path in (ROOT / "benchmarks" / "development").glob("**/*.yaml")
+        if path.name not in {"PLAN.yaml", "data.yaml"}
     )
     return sorted(paths)
 
 
 def test_locked_layout_is_explicit():
-    assert not (ROOT / "configs" / "stage1").exists()
-    assert not (ROOT / "configs" / "mac").exists()
-    assert not (ROOT / "experiments" / "stage1_starting_points").exists()
-    assert not (ROOT / "experiments" / "stage2_training").exists()
-    assert not (ROOT / "experiments" / "memory_phase_b").exists()
+    assert not (ROOT / "configs").exists()
+    assert not (ROOT / "experiments").exists()
+    assert (ROOT / "benchmarks" / "controls").is_dir()
+    assert (ROOT / "benchmarks" / "controls" / "smoke").is_dir()
+    assert (ROOT / "benchmarks" / "controls" / "substrate").is_dir()
+    assert (ROOT / "benchmarks" / "controls" / "smoke" / "results").is_dir()
+    assert (ROOT / "benchmarks" / "controls" / "substrate" / "results").is_dir()
+    assert (ROOT / "benchmarks" / "ad_hoc").is_dir()
+    assert (ROOT / "benchmarks" / "development").is_dir()
+    assert (ROOT / "benchmarks" / "core").is_dir()
+    assert (ROOT / "benchmarks" / "historical").is_dir()
 
-    assert (LINEAGE / "README.md").exists()
-    assert (LINEAGE / "PROTOCOL.yaml").exists()
-    assert not list((ROOT / "configs" / "stage2").glob("*.yaml"))
+    assert (HISTORICAL_RESULTS / "k_sweep.md").exists()
+    assert not (HISTORICAL_RESULTS.parent / "PROTOCOL.yaml").exists()
+    assert not (HISTORICAL_RESULTS.parent / "configs").exists()
+    assert not (ROOT / "runs" / "stage2_cleanroom_v1").exists()
 
 
-def test_protocol_is_pinned():
-    manifest = yaml.safe_load((LINEAGE / "PROTOCOL.yaml").read_text(encoding="utf-8"))
-    assert manifest["version"] == 3
-    assert manifest["status"] == "k_schedule_pending"
-    assert manifest["lineage"] == "stage2_cleanroom_v1"
-    assert manifest["data"]["artifact"] == "data/stage2_cleanroom_v1/sequence_512"
-    assert manifest["starting_points"]["memory_add"]["checkpoint"].startswith(
-        "runs/stage2_cleanroom_v1/"
+def test_historical_results_are_retained_without_runnable_surface():
+    expected = {
+        "historical_comparison.md",
+        "k_sweep.md",
+        "learning_rate.md",
+        "mixtures.md",
+        "pass_depth_and_inference.md",
+    }
+    assert {path.name for path in HISTORICAL_RESULTS.glob("*.md")} == expected
+
+
+def test_default_experiment_config_uses_active_2048_context():
+    from tiny_mistral_mptt.config import ExperimentConfig
+
+    cfg = ExperimentConfig()
+    assert cfg.data_dir == "data/dolmino/local_2048"
+    assert cfg.output_dir == "benchmarks/controls/smoke/results/vanilla"
+
+
+def test_local_2048_data_recipe_parses():
+    cfg = load_data_config(
+        ROOT / "data" / "dolmino" / "local_2048" / "config.yaml"
     )
-    assert manifest["starting_points"]["memory_tape32"]["checkpoint"].startswith(
-        "runs/stage2_cleanroom_v1/"
-    )
-    assert manifest["locked_protocol"]["backbone_learning_rate"] == 1.0e-6
-    assert manifest["locked_protocol"]["added_learning_rate"] == 1.0e-6
-    assert manifest["locked_protocol"]["k_schedule"] == "pending"
-    assert len(manifest["locked_protocol"]["k_sweep"]) == 4
-
-
-def test_data_recipe_parses():
-    cfg = load_data_config(LINEAGE / "configs" / "data" / "artifact.yaml")
-    assert cfg.output_dir == "data/stage2_cleanroom_v1/sequence_512"
-    assert cfg.model_dir == "checkpoints/TinyMistral-248M-v3"
+    assert cfg.output_dir == "data/dolmino/local_2048"
+    assert cfg.sequence_length == 2048
     assert cfg.train_tokens == 1_048_576
     assert cfg.validation_tokens == 131_072
 
 
-def test_all_active_experiment_configs_parse():
+def test_data_recipes_live_beside_their_artifacts():
+    for name in ("local_2048", "gpu_2048"):
+        path = ROOT / "data" / "dolmino" / name / "config.yaml"
+        assert path.exists()
+        cfg = load_data_config(path)
+        assert cfg.output_dir == f"data/dolmino/{name}"
+        assert cfg.sequence_length == 2048
+
+
+def test_lm_evaluation_suites_live_with_the_ad_hoc_study():
+    suite_dir = ROOT / "benchmarks" / "ad_hoc" / "lm_evaluation"
+    assert (suite_dir / "README.md").exists()
+    assert (suite_dir / "results" / "README.md").exists()
+    for name in ("quick.yaml", "full.yaml"):
+        suite = yaml.safe_load((suite_dir / name).read_text(encoding="utf-8"))
+        assert suite["tasks"]
+        assert all("name" in task and "num_fewshot" in task for task in suite["tasks"])
+
+
+def test_all_active_benchmark_configs_parse():
     paths = _active_config_paths()
     assert paths
     for path in paths:
         load_experiment_config(path)
 
 
-def test_learning_rate_sweep_includes_high_lr_arm():
-    expected = {0.0, 3.0e-8, 1.0e-7, 3.0e-7, 1.0e-6, 3.0e-6, 1.0e-5}
-    for variant in ("memory_add", "memory_tape32"):
-        paths = (LINEAGE / "configs" / "learning_rate" / variant).glob("backbone_lr_*.yaml")
-        observed = {load_experiment_config(path).pretrained_learning_rate for path in paths}
-        assert observed == expected
-
-
-def test_vanilla_learning_rate_controls_are_present():
-    paths = (LINEAGE / "configs" / "learning_rate" / "vanilla").glob("backbone_lr_*.yaml")
-    observed = {load_experiment_config(path).learning_rate for path in paths}
-    assert observed == {3.0e-7, 1.0e-6, 3.0e-6}
-
-
-def test_selected_lr_k_sweep_configs_are_complete():
-    expected = {"k2", "k2_90_k3_10", "k2_50_k3_50", "k3"}
-    for variant in ("memory_add", "memory_tape32"):
-        paths = {
-            path.stem: path
-            for path in (LINEAGE / "configs" / "k_sweep" / variant).glob("*.yaml")
-        }
-        assert set(paths) == expected
-        for path in paths.values():
-            config = load_experiment_config(path)
-            assert config.pretrained_learning_rate == 1.0e-6
-            assert config.added_learning_rate == 1.0e-6
-            assert config.max_unique_tokens == 1_048_576
-
-
-def test_config_and_run_namespaces_are_current():
-    roots = [ROOT / "configs", LINEAGE]
+def test_config_namespaces_are_current():
+    roots = [
+        ROOT / "benchmarks" / "controls",
+        ROOT / "benchmarks" / "development",
+        ROOT / "benchmarks" / "ad_hoc",
+    ]
     text = "\n".join(
         path.read_text(encoding="utf-8")
         for root in roots
@@ -105,20 +108,29 @@ def test_config_and_run_namespaces_are_current():
     )
     assert "runs/mac-" not in text
     assert "runs/cleanroom-v1" not in text
+    assert "runs/" not in text
+    assert "experiments/" not in text
+    assert "configs/" not in text
+
+
+def test_training_efficiency_defaults_to_2048_cases():
+    suite = yaml.safe_load(
+        (ROOT / "benchmarks" / "efficiency" / "suites" / "training.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert {case["sequence_length"] for case in suite["cases"]} == {2048}
 
 
 def test_root_readme_keeps_stage2_protocol_pending():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "The Stage 2 protocol remains open" in readme
-    assert "configs/stage2/memory_add_k3.yaml" not in readme
+    assert "configs/" not in readme
     assert "backbone learning rate `3e-7`" not in readme
 
 
 def test_stage2_docs_do_not_claim_an_old_lock():
-    lr_report = (LINEAGE / "results" / "learning_rate.md").read_text(encoding="utf-8")
+    lr_report = (HISTORICAL_RESULTS / "learning_rate.md").read_text(encoding="utf-8")
     validation = (ROOT / "docs" / "VALIDATION.md").read_text(encoding="utf-8")
     assert "locked clean-room protocol remains unchanged" not in lr_report
-    assert "The final K schedule and recurrent inference depth are not locked yet" in (
-        LINEAGE / "README.md"
-    ).read_text(encoding="utf-8")
-    assert "current clean-room lineage" in validation
+    assert "historical clean-room result records" in validation

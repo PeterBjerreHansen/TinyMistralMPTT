@@ -2,7 +2,7 @@
 
 This document defines reusable trainer semantics. It deliberately does not say
 which Stage 2 protocol is currently preferred; those decisions live under
-`experiments/` and, once locked, under `configs/stage2/`.
+`benchmarks/development/` and, once locked, under `benchmarks/core/`.
 
 ## Research stages versus trainer phases
 

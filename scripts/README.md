@@ -1,7 +1,8 @@
 # Scripts
 
-Scripts are thin command-line entry points. Experiment settings belong in
-`configs/` or `experiments/`; generated artifacts belong in `runs/`.
+Scripts are thin command-line entry points. Data recipes belong beside their
+artifacts under `data/`; experiment settings belong in `benchmarks/`; generated
+outputs belong in the relevant experiment's `results/` directory.
 
 ## Setup and validation
 

@@ -1,9 +1,0 @@
-output_dir: data/stage2_cleanroom_v1/sequence_512
-model_dir: checkpoints/TinyMistral-248M-v3
-sequence_length: 512
-train_tokens: 1048576
-validation_tokens: 131072
-seed: 1337
-dataset_repo: allenai/dolmino-mix-1124
-revision: 1c2f43706986135c6799d9917e0d06ecef7fb1bb
-shuffle_buffer: 10000

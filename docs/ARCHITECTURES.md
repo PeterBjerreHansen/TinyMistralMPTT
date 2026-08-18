@@ -2,7 +2,7 @@
 
 This document describes model mechanisms only. Experiment-specific LR, token
 budgets, pass depth choices, and checkpoint ancestry belong under
-`experiments/`.
+`benchmarks/`.
 
 ## Vanilla
 

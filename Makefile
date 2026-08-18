@@ -1,5 +1,5 @@
 .PHONY: test compile check download verify hf-check hf-layers hf-embeds \
-  mps-smoke prepare-data verify-data evaluate-nll evaluate-quick substrate-gates cleanroom-gates k-sweep-gates \
+  mps-smoke prepare-data verify-data evaluate-nll evaluate-quick substrate-gates \
   efficiency-mps efficiency-cuda efficiency-mps-training efficiency-mps-precision \
   efficiency-mps-context efficiency-mps-batch efficiency-cuda-training \
   efficiency-cuda-precision efficiency-cuda-context efficiency-cuda-batch cloud-preflight
@@ -8,7 +8,7 @@ test:
 	uv run pytest -q
 
 compile:
-	uv run python -m compileall -q src scripts tests experiments
+	uv run python -m compileall -q src scripts tests benchmarks
 
 check: test compile
 	git diff --check
@@ -32,74 +32,66 @@ mps-smoke:
 	uv run python scripts/smoke_mps.py
 
 prepare-data:
-	uv run python scripts/prepare_data.py \
-		--config experiments/stage2_cleanroom_v1/configs/data/artifact.yaml
+	uv run python scripts/prepare_data.py
 
 verify-data:
-	uv run python scripts/verify_data.py data/stage2_cleanroom_v1/sequence_512
+	uv run python scripts/verify_data.py data/dolmino/local_2048
 
 evaluate-nll:
 	uv run python scripts/evaluate_nll.py \
-		--config configs/substrate/mac/vanilla.yaml
+		--config benchmarks/controls/substrate/mac.yaml
 
 evaluate-quick:
 	uv run python scripts/evaluate_lm_harness.py \
-		--config configs/substrate/mac/vanilla.yaml \
-		--suite configs/evaluation/quick.yaml --limit 100
+		--config benchmarks/controls/substrate/mac.yaml \
+		--suite benchmarks/ad_hoc/lm_evaluation/quick.yaml --limit 100
 
 substrate-gates: check verify hf-check hf-layers hf-embeds mps-smoke
 
-# Assumes the pinned backbone and clean-room data artifact are present.
-cleanroom-gates: check verify-data
-
-# Requires a committed, clean source tree before starting the selected-LR K sweep.
-k-sweep-gates: check
-	uv run python scripts/verify_k_sweep.py
-
-# Engineering-only efficiency characterization. Results are written under runs/.
+# Engineering-only efficiency characterization. Results live beside the suites.
 efficiency-mps: efficiency-mps-training efficiency-mps-precision efficiency-mps-context efficiency-mps-batch
 
 efficiency-cuda: efficiency-cuda-training efficiency-cuda-precision efficiency-cuda-context efficiency-cuda-batch
 
 efficiency-mps-training:
 	uv run python scripts/benchmark_training_efficiency.py \
-		--suite efficiency_benchmarks/suites/training.yaml --device mps \
-		--output runs/efficiency/mps_training.json
+		--suite benchmarks/efficiency/suites/training.yaml --device mps \
+		--output benchmarks/efficiency/results/mps_training.json
 
 efficiency-mps-precision:
 	uv run python scripts/benchmark_training_efficiency.py \
-		--suite efficiency_benchmarks/suites/precision_mps.yaml \
-		--output runs/efficiency/mps_precision.json
+		--suite benchmarks/efficiency/suites/precision_mps.yaml \
+		--output benchmarks/efficiency/results/mps_precision.json
 
 efficiency-mps-context:
 	uv run python scripts/benchmark_training_efficiency.py \
-		--suite efficiency_benchmarks/suites/context_scaling.yaml --device mps \
-		--output runs/efficiency/mps_context.json
+		--suite benchmarks/efficiency/suites/context_scaling.yaml --device mps \
+		--output benchmarks/efficiency/results/mps_context.json
 
 efficiency-mps-batch:
 	uv run python scripts/benchmark_training_efficiency.py \
-		--suite efficiency_benchmarks/suites/batch_scaling.yaml --device mps \
-		--output runs/efficiency/mps_batch.json
+		--suite benchmarks/efficiency/suites/batch_scaling.yaml --device mps \
+		--output benchmarks/efficiency/results/mps_batch.json
 
 efficiency-cuda-training:
 	uv run python scripts/benchmark_training_efficiency.py \
-		--suite efficiency_benchmarks/suites/training.yaml --device cuda \
-		--output runs/efficiency/cuda_training.json
+		--suite benchmarks/efficiency/suites/training.yaml --device cuda \
+		--output benchmarks/efficiency/results/cuda_training.json
 
 efficiency-cuda-precision:
 	uv run python scripts/benchmark_training_efficiency.py \
-		--suite efficiency_benchmarks/suites/precision_cuda.yaml \
-		--output runs/efficiency/cuda_precision.json
+		--suite benchmarks/efficiency/suites/precision_cuda.yaml \
+		--output benchmarks/efficiency/results/cuda_precision.json
 
 efficiency-cuda-context:
 	uv run python scripts/benchmark_training_efficiency.py \
-		--suite efficiency_benchmarks/suites/context_scaling.yaml --device cuda --autocast-dtype bfloat16 \
-		--output runs/efficiency/cuda_context.json
+		--suite benchmarks/efficiency/suites/context_scaling.yaml --device cuda --autocast-dtype bfloat16 \
+		--output benchmarks/efficiency/results/cuda_context.json
 
 efficiency-cuda-batch:
 	uv run python scripts/benchmark_training_efficiency.py \
-		--suite efficiency_benchmarks/suites/batch_scaling.yaml --device cuda --autocast-dtype bfloat16 \
-		--output runs/efficiency/cuda_batch.json
+		--suite benchmarks/efficiency/suites/batch_scaling.yaml --device cuda --autocast-dtype bfloat16 \
+		--output benchmarks/efficiency/results/cuda_batch.json
 
 # Usage: make cloud-preflight CONFIG=path/to/config.yaml
 cloud-preflight:

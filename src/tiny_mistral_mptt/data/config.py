@@ -10,11 +10,11 @@ from .recipes import DOLMINO_REFERENCE_REVISION, DOLMINO_REPO_ID
 
 @dataclass(slots=True)
 class DataPreparationConfig:
-    output_dir: str = "data/dolmino/dev_512"
+    output_dir: str = "data/dolmino/local_2048"
     model_dir: str = "checkpoints/TinyMistral-248M-v3"
-    sequence_length: int = 512
-    train_tokens: int = 1_000_000
-    validation_tokens: int = 100_000
+    sequence_length: int = 2048
+    train_tokens: int = 1_048_576
+    validation_tokens: int = 131_072
     seed: int = 1337
     dataset_repo: str = DOLMINO_REPO_ID
     revision: str = DOLMINO_REFERENCE_REVISION

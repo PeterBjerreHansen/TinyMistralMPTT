@@ -9,7 +9,7 @@ Before a paid training run:
 ```bash
 uv sync --extra data --extra eval
 uv run pytest -q
-uv run python -m compileall -q src scripts tests experiments
+uv run python -m compileall -q src scripts tests benchmarks
 uv run python scripts/cloud_preflight.py --config <config.yaml>
 ```
 
@@ -18,6 +18,7 @@ TinyMistral checkpoint structure/configuration/weights hash, required model and
 data paths, data-artifact integrity, checkpoint paths, and accidental reuse of
 an existing output directory.
 
-Use `runs/` for generated checkpoints and benchmark output. Keep those files on
-persistent storage and back them up independently of an ephemeral GPU instance.
+Keep generated checkpoints and benchmark output in the relevant benchmark
+directory's `results/` path. Keep those files on persistent storage and back
+them up independently of an ephemeral GPU instance.
 Provider-specific deployment code is intentionally omitted until it is needed.
