@@ -1,6 +1,6 @@
 # Clean-room versus historical runs
 
-This note compares the locked `stage2_cleanroom_v1` results with the earlier
+This note compares the `stage2_cleanroom_v1` results with the earlier
 Stage 1/Stage 2 runs. Historical results remain useful, but they do not all
 have the same causal status.
 
@@ -16,10 +16,11 @@ the protocol decision without keeping the obsolete experiment surface active.
 - The clean-room data manifest is identical to the historical
   `data/dolmino/dev_512` manifest. Dataset drift is therefore not explaining
   the result differences.
-- The old `1e-7` Stage 2 runs are valid historical evidence, but the clean
-  protocol's `3e-7` runs are the current prospective results. Their improvement
-  is not a pure learning-rate ablation because the old runs and clean runs have
-  different training trajectories and source-code provenance.
+- The old `1e-7` Stage 2 runs are valid historical evidence. The earlier clean
+  `3e-7` runs are retained as a close comparison, while the current selected-LR
+  results use `1e-6`. None of these comparisons is a pure learning-rate
+  ablation because the runs have different training trajectories and source-
+  code provenance.
 - The old K=3 runs were descendants of already jointly adapted K=2 models. The
   clean K=3 runs start independently from E1 and include a compute-matched K=2
   control, so they are the first controlled K comparison.

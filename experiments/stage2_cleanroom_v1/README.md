@@ -1,7 +1,7 @@
 # Stage 2 clean-room lineage
 
-This directory contains the independent evidence used to select the locked
-Stage 2 protocol. The starting points, hashes, protocol, and results are in
+This directory contains the independent evidence used to develop the Stage 2
+protocol. The starting points, hashes, protocol, and results are in
 `PROTOCOL.yaml` and `results/`.
 
 ## Evidence layout
@@ -10,7 +10,7 @@ Stage 2 protocol. The starting points, hashes, protocol, and results are in
 - `learning_rate/`: independent backbone learning-rate arms.
 - `pass_depth/`: historical K=2/K=3 arms at the superseded 3e-7 backbone LR.
 - `mixtures/`: historical mixed-K arms at the superseded 3e-7 backbone LR.
-- `k_sweep/`: active final K-schedule comparison at the selected 1e-6 LR.
+- `k_sweep/`: active K-schedule comparison at the selected 1e-6 LR.
 
 Each config has a matching generated run directory under
 `runs/stage2_cleanroom_v1/`.

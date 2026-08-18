@@ -10,6 +10,10 @@ from pathlib import Path
 import yaml
 
 from tiny_mistral_mptt.config import load_experiment_config
+from tiny_mistral_mptt.config_invariants import (
+    differing_invariant_fields,
+    execution_invariant_view,
+)
 from tiny_mistral_mptt.data.manifest import file_sha256
 
 
@@ -80,7 +84,7 @@ def main() -> None:
         "clean-room data manifest hash does not match PROTOCOL.yaml",
     )
 
-    common = None
+    common_by_variant = {}
     expected_files = {f"{name}.yaml" for name in SCHEDULES}
     for variant in ("memory_add", "memory_tape32"):
         config_dir = LINEAGE / "configs" / "k_sweep" / variant
@@ -98,26 +102,17 @@ def main() -> None:
             name = path.stem
             config = load_experiment_config(path)
             expected_schedule, expected_weights, expected_weights_by_k, expected_eval_passes = SCHEDULES[name]
-            fields = {
-                "data_dir": config.data_dir,
-                "seed": config.seed,
-                "architecture_seed": config.architecture_seed,
-                "max_unique_tokens": config.max_unique_tokens,
-                "learning_rate": config.learning_rate,
-                "pretrained_learning_rate": config.pretrained_learning_rate,
-                "added_learning_rate": config.added_learning_rate,
-                "weight_decay": config.weight_decay,
-                "grad_accum_steps": config.grad_accum_steps,
-                "checkpoint_every_tokens": config.checkpoint_every_tokens,
-                "eval_every_tokens": config.eval_every_tokens,
-                "eval_batches": config.eval_batches,
-                "resume_from": config.resume_from,
-            }
-            if common is None:
-                common = fields
-            else:
-                _assert(fields == common, f"{path} differs from the common K-sweep settings")
+            _assert(config.variant == variant, f"{path} has the wrong variant")
+            _assert(config.phase == "B", f"{path} is not a Phase-B config")
+            _assert(config.resume_from is None, f"{path} must not resume another K-sweep arm")
+            fields = execution_invariant_view(config)
+            reference = common_by_variant.setdefault(variant, fields)
+            differences = differing_invariant_fields(reference, fields)
+            _assert(not differences, f"{path} differs in execution invariants: {differences}")
             _assert(config.init_from == expected_parent, f"{path} has the wrong E1 parent")
+            expected_output = ROOT / "runs" / "stage2_cleanroom_v1" / "k_sweep" / variant / f"{name}"
+            actual_output = (ROOT / config.output_dir).resolve()
+            _assert(actual_output == expected_output, f"{path} has the wrong output_dir")
             _assert(config.pass_schedule[0]["probabilities"] == expected_schedule, f"{path} has the wrong K schedule")
             _assert(config.pass_loss_weights == expected_weights, f"{path} has the wrong fixed-K weights")
             _assert(config.pass_loss_weights_by_k == expected_weights_by_k, f"{path} has the wrong K-specific weights")

@@ -1,5 +1,5 @@
 output_dir: data/stage2_cleanroom_v1/sequence_512
-model_dir: checkpoints/tinymistral_248m_base
+model_dir: checkpoints/TinyMistral-248M-v3
 sequence_length: 512
 train_tokens: 1048576
 validation_tokens: 131072

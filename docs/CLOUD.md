@@ -13,9 +13,10 @@ uv run python -m compileall -q src scripts tests experiments
 uv run python scripts/cloud_preflight.py --config <config.yaml>
 ```
 
-The preflight checks source cleanliness, CUDA/BF16 capability, required model
-and data paths, data-artifact integrity, checkpoint paths, and accidental reuse
-of an existing output directory.
+The preflight checks source cleanliness, CUDA/BF16 capability, the exact pinned
+TinyMistral checkpoint structure/configuration/weights hash, required model and
+data paths, data-artifact integrity, checkpoint paths, and accidental reuse of
+an existing output directory.
 
 Use `runs/` for generated checkpoints and benchmark output. Keep those files on
 persistent storage and back them up independently of an ephemeral GPU instance.

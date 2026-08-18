@@ -55,6 +55,7 @@ def test_protocol_is_pinned():
 def test_data_recipe_parses():
     cfg = load_data_config(LINEAGE / "configs" / "data" / "artifact.yaml")
     assert cfg.output_dir == "data/stage2_cleanroom_v1/sequence_512"
+    assert cfg.model_dir == "checkpoints/TinyMistral-248M-v3"
     assert cfg.train_tokens == 1_048_576
     assert cfg.validation_tokens == 131_072
 
@@ -104,3 +105,20 @@ def test_config_and_run_namespaces_are_current():
     )
     assert "runs/mac-" not in text
     assert "runs/cleanroom-v1" not in text
+
+
+def test_root_readme_keeps_stage2_protocol_pending():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "The Stage 2 protocol remains open" in readme
+    assert "configs/stage2/memory_add_k3.yaml" not in readme
+    assert "backbone learning rate `3e-7`" not in readme
+
+
+def test_stage2_docs_do_not_claim_an_old_lock():
+    lr_report = (LINEAGE / "results" / "learning_rate.md").read_text(encoding="utf-8")
+    validation = (ROOT / "docs" / "VALIDATION.md").read_text(encoding="utf-8")
+    assert "locked clean-room protocol remains unchanged" not in lr_report
+    assert "The final K schedule and recurrent inference depth are not locked yet" in (
+        LINEAGE / "README.md"
+    ).read_text(encoding="utf-8")
+    assert "current clean-room lineage" in validation

@@ -82,6 +82,7 @@ def test_checkpoint_resume_allows_extending_token_budget(tmp_path):
         experiment_config={
             "variant": "vanilla",
             "max_unique_tokens": 4,
+            "lr_schedule": {"type": "constant"},
             "output_dir": "a",
             "resume_from": None,
         },
@@ -97,11 +98,47 @@ def test_checkpoint_resume_allows_extending_token_budget(tmp_path):
         expected_experiment_config={
             "variant": "vanilla",
             "max_unique_tokens": 8,
+            "lr_schedule": {"type": "constant"},
             "output_dir": "extended",
             "resume_from": str(path),
         },
     )
     assert state.unique_tokens_seen == 4
+
+
+def test_checkpoint_resume_rejects_changed_scheduled_horizon(tmp_path):
+    model = torch.nn.Linear(2, 2)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, foreach=False)
+    sampler = StatefulBlockSampler(5, seed=3)
+    path = save_checkpoint(
+        tmp_path / "scheduled.pt",
+        model=model,
+        optimizer=optimizer,
+        sampler_state=sampler.state_dict(),
+        train_state=TrainState(unique_tokens_seen=4),
+        experiment_config={
+            "variant": "vanilla",
+            "max_unique_tokens": 4,
+            "lr_schedule": {"type": "cosine"},
+        },
+        data_manifest_sha256="same",
+    )
+    replacement = torch.nn.Linear(2, 2)
+    replacement_optimizer = torch.optim.AdamW(replacement.parameters(), lr=1e-3, foreach=False)
+    import pytest
+
+    with pytest.raises(ValueError, match="max_unique_tokens"):
+        load_checkpoint(
+            path,
+            model=replacement,
+            optimizer=replacement_optimizer,
+            expected_manifest_sha256="same",
+            expected_experiment_config={
+                "variant": "vanilla",
+                "max_unique_tokens": 8,
+                "lr_schedule": {"type": "cosine"},
+            },
+        )
 
 
 def test_checkpoint_resume_accepts_new_default_experiment_fields(tmp_path):
@@ -177,6 +214,7 @@ def test_checkpoint_resume_allows_new_output_and_evaluation_schedule(tmp_path):
             "variant": "memory_add",
             "phase": "B",
             "init_from": "source.pt",
+            "max_unique_tokens": 1048576,
             "eval_every_tokens": 65536,
             "eval_batches": 16,
             "eval_passes": 2,

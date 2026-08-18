@@ -48,8 +48,9 @@ For MemoryAdd and MemoryTape32:
 
 The repository structure is also part of reproducibility:
 
-- the locked lineage is `experiments/stage2_cleanroom_v1/`;
-- canonical Stage 2 configs are under `configs/stage2/`;
+- the current clean-room lineage is `experiments/stage2_cleanroom_v1/`;
+- canonical Stage 2 configs move under `configs/stage2/` only after the
+  protocol is explicitly locked;
 - generated outputs mirror their config paths under `runs/`;
 - configs point only to the current checkpoint and data namespaces;
 - protocol and result records use the same descriptive names as their configs.

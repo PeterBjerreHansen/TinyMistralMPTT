@@ -85,8 +85,6 @@ def save_checkpoint(
 
 def _resume_config_view(config: dict) -> dict:
     # These fields identify where/how a resume is invoked, not the trajectory.
-    # ``max_unique_tokens`` is a stopping budget, so allowing it to increase is
-    # what makes an exact frozen-phase continuation possible.
     ignored = {
         # Local paths are relocatable; the manifest and strict model-state
         # checks provide the actual data/model identity guarantees.
@@ -94,7 +92,6 @@ def _resume_config_view(config: dict) -> dict:
         "data_dir",
         "output_dir",
         "resume_from",
-        "max_unique_tokens",
         "init_from",
         "eval_every_tokens",
         "eval_batches",
@@ -102,6 +99,13 @@ def _resume_config_view(config: dict) -> dict:
         "checkpoint_every_tokens",
         *_LEGACY_NON_TRAJECTORY_FIELDS,
     }
+    schedule = config.get("lr_schedule")
+    schedule_type = "cosine" if schedule is None else str(schedule.get("type", "cosine"))
+    # Constant-LR runs can safely change their stopping budget. Cosine and
+    # piecewise schedules use max_unique_tokens as their LR horizon, so changing
+    # it would alter the resumed trajectory and is rejected.
+    if schedule_type == "constant":
+        ignored.add("max_unique_tokens")
     result = {
         key: value for key, value in config.items() if key not in ignored
     }

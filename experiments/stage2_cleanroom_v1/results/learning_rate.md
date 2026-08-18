@@ -67,11 +67,11 @@ lowest pass-2 NLL.
 
 ## Protocol status
 
-The locked clean-room protocol remains unchanged at backbone LR `3e-7`.
-These E2 results are protocol-development evidence only; no E2 checkpoint is
-used as an E3 parent. The next decision is to inspect the upper-boundary
-stability and interventions, then select one LR and rerun the K schedules once
-at that selected rate. K comparisons should not be rerun before that choice.
+E2 selected `1e-6` for both the backbone and added parameters. These learning-
+rate arms remain protocol-development evidence; no E2 checkpoint is used as a
+K-sweep parent. The selected-LR K schedules are recorded separately under
+`results/k_sweep.md`, while the final K schedule remains pending context and
+efficiency qualification.
 
 The corresponding configs and runs are grouped under:
 
