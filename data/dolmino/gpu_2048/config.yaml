@@ -1,7 +1,7 @@
 output_dir: data/dolmino/gpu_2048
 model_dir: checkpoints/TinyMistral-248M-v3
 sequence_length: 2048
-train_tokens: 99999744
+train_tokens: 100007936
 validation_tokens: 2000896
 seed: 1337
 dataset_repo: allenai/dolmino-mix-1124

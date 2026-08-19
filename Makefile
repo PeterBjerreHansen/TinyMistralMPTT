@@ -2,7 +2,8 @@
   mps-smoke prepare-data verify-data evaluate-nll evaluate-quick substrate-gates \
   efficiency-mps efficiency-cuda efficiency-mps-training efficiency-mps-precision \
   efficiency-mps-context efficiency-mps-batch efficiency-cuda-training \
-  efficiency-cuda-precision efficiency-cuda-context efficiency-cuda-batch cloud-preflight
+  efficiency-cuda-precision efficiency-cuda-context efficiency-cuda-batch \
+  efficiency-cuda-batch-qualification select-cuda-batch cloud-preflight
 
 test:
 	uv run pytest -q
@@ -96,6 +97,18 @@ efficiency-cuda-batch:
 	uv run python scripts/benchmark_training_efficiency.py \
 		--suite benchmarks/efficiency/suites/batch_scaling.yaml --device cuda --autocast-dtype bfloat16 \
 		--output benchmarks/efficiency/results/cuda_batch.json
+
+# Core-run batching qualification. This keeps grad accumulation at 1 so the
+# hardware microbatch axis is measured without silently changing optimizer batch.
+efficiency-cuda-batch-qualification:
+	uv run python scripts/benchmark_training_efficiency.py \
+		--suite benchmarks/efficiency/suites/cuda_batch_qualification.yaml \
+		--output benchmarks/efficiency/results/cuda_batch_qualification.json
+
+# Usage: make select-cuda-batch RESULT=benchmarks/efficiency/results/cuda_batch_qualification.json
+select-cuda-batch:
+	@test -n "$(RESULT)" || (echo "RESULT is required" && exit 2)
+	uv run python scripts/select_cuda_batch.py $(RESULT)
 
 # Usage: make cloud-preflight CONFIG=path/to/config.yaml
 cloud-preflight:

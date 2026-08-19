@@ -115,3 +115,18 @@ def test_deleted_diagnostic_studies_are_not_referenced_by_current_docs():
     text = "\n".join(text_parts)
     assert "pass_stability/" not in text
     assert "exact_vs_recurrent_inference/" not in text
+
+
+def test_gpu_substrate_preserves_validated_2048_token_optimizer_batch():
+    cfg = load_experiment_config(ROOT / "benchmarks" / "controls" / "substrate" / "gpu.yaml")
+    data = load_data_config(ROOT / "data" / "dolmino" / "gpu_2048" / "config.yaml")
+    assert cfg.batch_size == 1
+    assert cfg.grad_accum_steps == 1
+    assert cfg.batch_size * cfg.grad_accum_steps * data.sequence_length == 2048
+    assert cfg.max_unique_tokens == data.train_tokens == 100_007_936
+    assert data.train_tokens % (8 * data.sequence_length) == 0
+
+
+def test_ci_runs_canonical_check_gate():
+    workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
+    assert "- run: make check" in workflow

@@ -115,9 +115,22 @@ class Trainer:
             for parameter in model.parameters()
             if parameter.requires_grad and id(parameter) in added_ids
         ]
+        microbatch_tokens = config.batch_size * train_data.sequence_length
+        nominal_optimizer_batch_tokens = microbatch_tokens * config.grad_accum_steps
+        planned_optimizer_steps = (
+            config.max_unique_tokens + nominal_optimizer_batch_tokens - 1
+        ) // nominal_optimizer_batch_tokens
         run_info = {
             "source": _source_provenance(),
             "config": config.to_dict(),
+            "batching": {
+                "sequence_length": train_data.sequence_length,
+                "microbatch_size": config.batch_size,
+                "grad_accum_steps": config.grad_accum_steps,
+                "microbatch_tokens": microbatch_tokens,
+                "nominal_optimizer_batch_tokens": nominal_optimizer_batch_tokens,
+                "planned_optimizer_steps": planned_optimizer_steps,
+            },
             "precision": {
                 "parameter_dtype": config.dtype,
                 "autocast_dtype": config.autocast_dtype,
@@ -362,6 +375,10 @@ class Trainer:
                 "loss": update_loss / accumulation_steps,
                 "grad_norm": float(grad_norm.detach().cpu()),
                 "tokens_per_second": (tokens_per_micro * accumulation_steps) / elapsed,
+                "microbatch_tokens": tokens_per_micro,
+                "accumulation_steps": accumulation_steps,
+                "optimizer_batch_tokens": tokens_per_micro * accumulation_steps,
+                "nominal_optimizer_batch_tokens": tokens_per_micro * cfg.grad_accum_steps,
                 "mean_passes": update_passes / accumulation_steps,
                 **self._pass_schedule_metrics(),
                 **lr_record,

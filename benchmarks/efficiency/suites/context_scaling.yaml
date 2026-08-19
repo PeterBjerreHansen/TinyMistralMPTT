@@ -8,6 +8,7 @@ defaults:
   warmup_steps: 1
   measure_steps: 2
   batch_size: 1
+  grad_accum_steps: 1
 cases:
   - {variant: vanilla, passes: 1, sequence_length: 512}
   - {variant: vanilla, passes: 1, sequence_length: 2048}

@@ -59,7 +59,10 @@ sparingly and document why the difference is necessary in the study README.
 fields, including `init_from` and `resume_from`, must match unless explicitly
 declared. This prevents an apparently controlled comparison from silently using
 different data, optimization, precision, initialization, or evaluation
-settings.
+settings. In particular, `batch_size` and `grad_accum_steps` are not treated as
+mere hardware metadata: together with sequence length they determine the
+optimizer-batch tokens and must remain controlled unless the study explicitly
+asks about batching.
 
 ## Verification
 

@@ -61,3 +61,13 @@ recipe name, streaming shuffle buffer, preparation seed, and SHA-256 hashes of
 every binary artifact. Dependency versions are subsequently frozen by the
 project `uv.lock` generated on the machine that first resolves the online
 dependencies.
+
+## Core-run split ownership
+
+The document-disjoint validation guarantee is defined within one materialized
+artifact. For a locked core campaign, Phase-A initialization and Phase-B
+training should therefore use the same pinned core artifact as the reported
+validation set (currently `data/dolmino/gpu_2048`). Development wiring may keep
+using `local_2048`, but its checkpoint is not the parent of a locked core run.
+This avoids relying on cross-artifact shuffle behavior to argue that serious
+training and validation are disjoint.

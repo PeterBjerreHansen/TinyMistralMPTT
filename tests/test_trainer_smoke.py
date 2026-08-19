@@ -69,7 +69,16 @@ def test_end_to_end_vanilla_trainer_and_resume(tmp_path):
     assert state1.unique_tokens_seen == 32
     checkpoint = tmp_path / "run1" / "latest.pt"
     assert checkpoint.exists()
-    source = json.loads((tmp_path / "run1" / "run.json").read_text())["source"]
+    run_info = json.loads((tmp_path / "run1" / "run.json").read_text())
+    assert run_info["batching"] == {
+        "sequence_length": 8,
+        "microbatch_size": 2,
+        "grad_accum_steps": 1,
+        "microbatch_tokens": 16,
+        "nominal_optimizer_batch_tokens": 16,
+        "planned_optimizer_steps": 4,
+    }
+    source = run_info["source"]
     if source["git_commit"] is None:
         # Source archives intentionally have no .git metadata.
         assert source["git_dirty"] is None
@@ -113,6 +122,14 @@ def test_trainer_can_finish_with_partial_gradient_accumulation(tmp_path):
     assert state.unique_tokens_seen == 40
     assert state.micro_steps == 5
     assert state.optimizer_steps == 2
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "partial-run" / "metrics.jsonl").read_text().splitlines()
+        if json.loads(line)["event"] == "train"
+    ]
+    assert [record["optimizer_batch_tokens"] for record in records] == [24, 16]
+    assert [record["nominal_optimizer_batch_tokens"] for record in records] == [24, 24]
+    assert [record["accumulation_steps"] for record in records] == [3, 2]
 
 
 def test_interrupted_resume_matches_uninterrupted_parameters(tmp_path):

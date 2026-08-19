@@ -34,6 +34,14 @@ The Stage 2 protocol remains open. The historical clean-room lineage selected
 512-token context. The active 2048-token qualification also supports K=2 as the
 lower-compute baseline, but no 100M-token core campaign is locked.
 
+The validated 2048-token development trajectory uses one 2048-token microbatch
+per optimizer update. CUDA may justify a larger microbatch for throughput, but
+that optimizer-batch change must be measured explicitly rather than inherited
+from a hardware default. `make efficiency-cuda-batch-qualification` measures
+K=2 MemoryAdd/MemoryTape32 at accumulation 1; `scripts/select_cuda_batch.py`
+then reports the smallest common efficient microbatch and whether it changes the
+scientific optimizer-batch size.
+
 Current evidence:
 
 ```text

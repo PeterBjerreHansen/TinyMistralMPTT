@@ -86,7 +86,16 @@ uv run python scripts/smoke_mps.py
 
 ## CUDA gate
 
-No CUDA efficiency claim is assumed by the repository. Before a serious GPU
-campaign, benchmark the intended models and context lengths and record peak
-memory, throughput, parameter count, effective pass count, and inference mode.
-Then run `scripts/cloud_preflight.py` against the exact intended paid-run config.
+No CUDA efficiency claim or large optimizer batch is assumed by the repository.
+The 2048-context development reference uses 2,048 unique tokens per optimizer
+update. Before a serious GPU campaign, run the K=2 CUDA batch-qualification
+suite at `grad_accum_steps=1`, record OOM/throughput/peak-memory behavior, and
+select the smallest common efficient MemoryAdd/MemoryTape32 microbatch. A
+selected batch above 1 is a protocol change, not merely a hardware setting, and
+must be qualified before a core study is locked.
+
+The efficiency runner reports microbatch tokens, gradient accumulation,
+optimizer-batch tokens, optimizer-step throughput, unique-token throughput, and
+memory telemetry. The trainer records the same batching semantics in `run.json`
+and per-update metrics. Finally run `scripts/cloud_preflight.py` against the
+exact intended paid-run config.

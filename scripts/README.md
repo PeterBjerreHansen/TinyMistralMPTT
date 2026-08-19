@@ -19,6 +19,20 @@ verify_study.py
 smoke_mps.py
 ```
 
+## Efficiency and CUDA qualification
+
+```text
+benchmark_training_efficiency.py
+select_cuda_batch.py
+cloud_preflight.py
+```
+
+`benchmark_training_efficiency.py` measures real optimizer steps and supports
+explicit gradient accumulation. `select_cuda_batch.py` consumes the dedicated
+CUDA K=2 qualification result and selects the smallest common efficient
+MemoryAdd/MemoryTape32 microbatch without pretending that a larger optimizer
+batch has already been scientifically validated.
+
 ## Training and evaluation
 
 ```text

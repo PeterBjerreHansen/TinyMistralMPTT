@@ -87,11 +87,12 @@ def main() -> None:
 
     data_dir = _repo_path(root, cfg.data_dir)
     manifest_sha256 = None
+    data_manifest = None
     if not data_dir.exists():
         failures.append(f"data_dir does not exist: {data_dir}")
     else:
         try:
-            verify_artifact(data_dir)
+            data_manifest = verify_artifact(data_dir)
             manifest_sha256 = file_sha256(data_dir / "manifest.json")
         except Exception as exc:  # preflight should aggregate failures
             failures.append(f"data artifact verification failed: {exc}")
@@ -135,11 +136,23 @@ def main() -> None:
             }
         )
 
+    batching = None
+    if data_manifest is not None:
+        microbatch_tokens = cfg.batch_size * data_manifest.sequence_length
+        batching = {
+            "sequence_length": data_manifest.sequence_length,
+            "microbatch_size": cfg.batch_size,
+            "grad_accum_steps": cfg.grad_accum_steps,
+            "microbatch_tokens": microbatch_tokens,
+            "nominal_optimizer_batch_tokens": microbatch_tokens * cfg.grad_accum_steps,
+        }
+
     report = {
         "status": "pass" if not failures else "fail",
         "config": str(config_path),
         "source": {"git_commit": commit, "git_dirty": dirty},
         "precision": {"parameter_dtype": cfg.dtype, "autocast_dtype": cfg.autocast_dtype},
+        "batching": batching,
         "model_verification": model_verification,
         "hardware": hardware,
         "data_manifest_sha256": manifest_sha256,

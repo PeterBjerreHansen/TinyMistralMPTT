@@ -40,7 +40,8 @@ def _load_suite(path: str | Path) -> tuple[dict[str, Any], list[dict[str, Any]]]
         if not isinstance(case, dict):
             raise ValueError(f"case {index} must be a mapping")
         item = {**defaults, **case}
-        for key in ("variant", "passes", "sequence_length", "batch_size"):
+        item.setdefault("grad_accum_steps", 1)
+        for key in ("variant", "passes", "sequence_length", "batch_size", "grad_accum_steps"):
             if key not in item:
                 raise ValueError(f"case {index} is missing {key!r}")
         normalized.append(item)
@@ -168,6 +169,7 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
     passes = int(case["passes"])
     sequence_length = int(case["sequence_length"])
     batch_size = int(case["batch_size"])
+    grad_accum_steps = int(case.get("grad_accum_steps", 1))
     parameter_dtype = str(case.get("parameter_dtype", "float32"))
     autocast_dtype = case.get("autocast_dtype")
     if autocast_dtype in {"none", "null", ""}:
@@ -187,8 +189,10 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("vanilla efficiency cases require passes=1")
     if variant != "vanilla" and passes < 2:
         raise ValueError("multipass efficiency cases require passes>=2")
-    if min(sequence_length, batch_size, measure_steps) <= 0 or warmup_steps < 0:
-        raise ValueError("sequence_length, batch_size, measure_steps must be positive")
+    if min(sequence_length, batch_size, grad_accum_steps, measure_steps) <= 0 or warmup_steps < 0:
+        raise ValueError(
+            "sequence_length, batch_size, grad_accum_steps, and measure_steps must be positive"
+        )
     if parameter_dtype != "float32" and autocast_dtype is not None:
         raise ValueError("autocast benchmark cases require FP32 parameter storage")
 
@@ -201,6 +205,9 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
         "passes": passes,
         "sequence_length": sequence_length,
         "batch_size": batch_size,
+        "grad_accum_steps": grad_accum_steps,
+        "microbatch_tokens": batch_size * sequence_length,
+        "optimizer_batch_tokens": batch_size * sequence_length * grad_accum_steps,
         "parameter_dtype": parameter_dtype,
         "autocast_dtype": autocast_dtype,
         "attention_backend": attention_backend,
@@ -240,22 +247,25 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
         def step() -> tuple[float, float]:
             assert model is not None and optimizer is not None
             optimizer.zero_grad(set_to_none=True)
-            with autocast_context(device, autocast_dtype):
-                output = model.compute_loss(
-                    ids,
-                    phase="B",
-                    passes=passes,
-                    loss_weights=weights,
-                )
-            if not bool(torch.isfinite(output.loss).item()):
-                raise RuntimeError("non-finite loss")
-            output.loss.backward()
+            accumulated_loss = 0.0
+            for _ in range(grad_accum_steps):
+                with autocast_context(device, autocast_dtype):
+                    output = model.compute_loss(
+                        ids,
+                        phase="B",
+                        passes=passes,
+                        loss_weights=weights,
+                    )
+                if not bool(torch.isfinite(output.loss).item()):
+                    raise RuntimeError("non-finite loss")
+                (output.loss / grad_accum_steps).backward()
+                accumulated_loss += float(output.loss.detach().cpu())
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             if not bool(torch.isfinite(grad_norm).item()):
                 raise RuntimeError("non-finite gradient norm")
             optimizer.step()
             synchronize(device)
-            return float(output.loss.detach().cpu()), float(grad_norm.detach().cpu())
+            return accumulated_loss / grad_accum_steps, float(grad_norm.detach().cpu())
 
         for _ in range(warmup_steps):
             step()
@@ -271,7 +281,7 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
             grad_norms.append(grad_norm)
         elapsed = max(time.perf_counter() - started, 1e-12)
 
-        unique_tokens = batch_size * sequence_length * measure_steps
+        unique_tokens = batch_size * sequence_length * grad_accum_steps * measure_steps
         pass_tokens = unique_tokens * passes
         unique_tokens_per_second = unique_tokens / elapsed
         result.update(
@@ -279,6 +289,9 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
                 "status": "ok",
                 "elapsed_seconds": elapsed,
                 "milliseconds_per_step": elapsed * 1000.0 / measure_steps,
+                "milliseconds_per_optimizer_step": elapsed * 1000.0 / measure_steps,
+                "optimizer_steps_per_second": measure_steps / elapsed,
+                "microbatches_per_second": (measure_steps * grad_accum_steps) / elapsed,
                 "unique_tokens_per_second": unique_tokens_per_second,
                 "pass_tokens_per_second": pass_tokens / elapsed,
                 "estimated_hours_per_100m_unique_tokens": 100_000_000.0
@@ -344,6 +357,7 @@ def main() -> None:
         print(
             f"[{index}/{len(cases)}] {case['variant']} K={case['passes']} "
             f"T={case['sequence_length']} B={case['batch_size']} "
+            f"A={case.get('grad_accum_steps', 1)} "
             f"device={case.get('device', 'auto')} autocast={case.get('autocast_dtype')}"
         )
         row = _run_case(case)

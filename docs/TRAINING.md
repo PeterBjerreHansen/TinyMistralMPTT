@@ -90,7 +90,34 @@ only to continue the same run.
 
 A development checkpoint should never become a main-run parent merely because
 it is newest. Main Stage 2 ancestry is defined by the locked core study and the
-selected Stage 1 checkpoint provenance recorded by the run.
+selected Stage 1 checkpoint provenance recorded by the run. For the serious
+CUDA campaign, rerun any Phase-A wiring initialization against the same pinned
+core data artifact used by Phase B (currently `data/dolmino/gpu_2048`) rather
+than using a `local_2048` development checkpoint. This keeps the serious
+training and held-out validation partition under one artifact's documented
+split guarantee.
+
+## Batching semantics
+
+Microbatch size and optimizer-batch size are separate controls. At sequence
+length `T`:
+
+```text
+microbatch_tokens = batch_size * T
+nominal_optimizer_batch_tokens = batch_size * grad_accum_steps * T
+```
+
+The 2048-context development evidence used `batch_size=1` and
+`grad_accum_steps=1`, hence 2,048 unique tokens per optimizer update. A larger
+CUDA microbatch is an engineering opportunity, but if accumulation remains 1 it
+also changes the scientific optimizer-batch size and therefore the number of
+optimizer updates per token. Do not silently compensate by adding accumulation.
+
+The trainer divides each microbatch loss by the realized accumulation count,
+then clips gradients and performs one optimizer step. A final partial
+accumulation is allowed so exact token budgets do not require a full nominal
+optimizer batch. `run.json` records the nominal batching contract and every
+training record reports the actual optimizer-batch tokens used by that update.
 
 ## Token accounting
 
