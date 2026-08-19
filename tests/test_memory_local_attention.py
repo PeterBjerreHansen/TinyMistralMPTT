@@ -153,6 +153,22 @@ def test_sparse_attention_c1_matches_strict_local_attention():
     torch.testing.assert_close(sparse, dense, atol=0, rtol=0)
 
 
+def test_sparse_attention_c1_dense_bank_fast_path_matches_reference():
+    from tiny_mistral_mptt.attention.memory_local import strict_past_sparse_memory_attention
+
+    torch.manual_seed(33)
+    q = torch.randn(1, 4, 11, 8)
+    k = torch.randn(1, 2, 11, 8)
+    v = torch.randn(1, 2, 11, 8)
+    writes_before = torch.arange(11)[None, :]
+    mask = torch.ones(1, 11, dtype=torch.bool)
+    actual = strict_past_sparse_memory_attention(
+        q, k, v, writes_before=writes_before, memory_mask=mask, window=5
+    )
+    expected = strict_past_local_attention(q, k, v, window=5)
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+
+
 def test_sparse_attention_window_counts_records_not_source_distance():
     from tiny_mistral_mptt.attention.memory_local import strict_past_sparse_memory_attention
 
@@ -169,3 +185,46 @@ def test_sparse_attention_window_counts_records_not_source_distance():
     )
     # Equal keys => uniform attention over the two retained records: (3+5)/2.
     torch.testing.assert_close(out[0, 0, 5, 0], torch.tensor(4.0), atol=0, rtol=0)
+
+
+def test_sparse_attention_compact_windows_support_batched_histories_and_masks():
+    from tiny_mistral_mptt.attention.memory_local import (
+        strict_past_sparse_memory_attention,
+    )
+
+    torch.manual_seed(4)
+    q = torch.randn(2, 4, 6, 3)
+    k = torch.randn(2, 2, 5, 3)
+    v = torch.randn(2, 2, 5, 3)
+    writes_before = torch.tensor([[0, 1, 1, 2, 3, 4], [0, 0, 1, 1, 2, 3]])
+    mask = torch.tensor(
+        [[True, False, True, True, False], [True, True, False, True, False]]
+    )
+    actual = strict_past_sparse_memory_attention(
+        q,
+        k,
+        v,
+        writes_before=writes_before,
+        memory_mask=mask,
+        window=2,
+    )
+
+    expected = torch.zeros_like(actual)
+    groups = q.shape[1] // k.shape[1]
+    for batch_index in range(q.shape[0]):
+        for position in range(q.shape[2]):
+            count = int(writes_before[batch_index, position])
+            indices = list(range(max(0, count - 2), count))
+            indices = [index for index in indices if bool(mask[batch_index, index])]
+            if not indices:
+                continue
+            grouped_query = q[batch_index].reshape(k.shape[1], groups, q.shape[2], -1)
+            query_at_position = grouped_query[:, :, position, :]
+            keys = k[batch_index, :, indices, :]
+            values = v[batch_index, :, indices, :]
+            scores = torch.einsum("hgd,hmd->hgm", query_at_position, keys)
+            probabilities = torch.softmax(scores / (3**0.5), dim=-1)
+            result = torch.einsum("hgm,hmd->hgd", probabilities, values)
+            expected[batch_index, :, position, :] = result.reshape(q.shape[1], -1)
+
+    torch.testing.assert_close(actual, expected, atol=2e-6, rtol=2e-6)

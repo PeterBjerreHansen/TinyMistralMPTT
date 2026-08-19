@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+from pathlib import Path
 
 import torch
 
@@ -38,6 +39,12 @@ def _nll(logits: torch.Tensor, ids: torch.Tensor) -> tuple[float, int]:
 
 def _rms(value: torch.Tensor) -> float:
     return float(value.float().square().mean().sqrt().detach().cpu())
+
+
+def _writer_identity_ratio(model) -> float:
+    weight = model.writer.proj.weight.float()
+    identity = torch.eye(weight.shape[0], device=weight.device, dtype=weight.dtype)
+    return float(((weight - identity).norm() / identity.norm()).detach().cpu())
 
 
 def _condition_hiddens(
@@ -89,6 +96,7 @@ def main() -> None:
     parser.add_argument("--config", required=True)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--max-blocks", type=int, default=None)
+    parser.add_argument("--output", default=None)
     args = parser.parse_args()
 
     cfg = load_experiment_config(args.config)
@@ -126,6 +134,12 @@ def main() -> None:
     baseline_count = 0
     embedding_rms_sum = 0.0
     residual_rms_sum = 0.0
+    writer_records = 0
+    writer_elements = 0
+    writer_input_sq = 0.0
+    writer_output_sq = 0.0
+    writer_delta_sq = 0.0
+    writer_cosine_sum = 0.0
 
     with torch.no_grad():
         for index in range(blocks):
@@ -134,6 +148,24 @@ def main() -> None:
             token_embeddings = model.backbone.model.embed_tokens(ids)
             first_hidden = model._run_first_hidden(ids)
             mismatch_hidden = model._run_first_hidden(mismatch_ids)
+
+            if isinstance(model, (SparseMemoryTapeVariant, MemoryAddSparseTapeVariant)):
+                write_mask = model.write_mask(ids)
+                write_input = first_hidden[write_mask]
+                write_output = model.writer(first_hidden)[write_mask]
+                if write_input.numel():
+                    writer_records += int(write_input.shape[0])
+                    writer_elements += int(write_input.numel())
+                    writer_input_sq += float(write_input.float().square().sum().cpu())
+                    writer_output_sq += float(write_output.float().square().sum().cpu())
+                    writer_delta_sq += float(
+                        (write_output.float() - write_input.float()).square().sum().cpu()
+                    )
+                    writer_cosine_sum += float(
+                        torch.nn.functional.cosine_similarity(
+                            write_output.float(), write_input.float(), dim=-1
+                        ).sum().cpu()
+                    )
 
             baseline_logits = model.backbone.lm_head(first_hidden).float()
             loss, count = _nll(baseline_logits, ids)
@@ -192,7 +224,28 @@ def main() -> None:
             ),
         }
 
-    print(json.dumps(result, indent=2, sort_keys=True))
+    if isinstance(model, (SparseMemoryTapeVariant, MemoryAddSparseTapeVariant)):
+        writer_result: dict[str, float | int] = {
+            "write_records": writer_records,
+            "weight_identity_frobenius_ratio": _writer_identity_ratio(model),
+        }
+        if writer_records and writer_elements:
+            writer_result.update(
+                {
+                    "write_input_rms": math.sqrt(writer_input_sq / writer_elements),
+                    "write_output_rms": math.sqrt(writer_output_sq / writer_elements),
+                    "write_delta_rms": math.sqrt(writer_delta_sq / writer_elements),
+                    "write_output_input_cosine": writer_cosine_sum / writer_records,
+                }
+            )
+        result["sparse_writer_diagnostics"] = writer_result
+
+    rendered = json.dumps(result, indent=2, sort_keys=True)
+    if args.output:
+        path = Path(args.output)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(rendered + "\n", encoding="utf-8")
+    print(rendered)
 
 
 if __name__ == "__main__":

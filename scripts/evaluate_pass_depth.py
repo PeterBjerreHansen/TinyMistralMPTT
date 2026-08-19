@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 
 import torch
 
@@ -21,6 +22,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", default=None)
     parser.add_argument("--passes", type=int, default=None)
     parser.add_argument("--max-blocks", type=int, default=None)
+    parser.add_argument("--output", default=None)
     args = parser.parse_args()
 
     cfg = load_experiment_config(args.config)
@@ -43,7 +45,12 @@ def main() -> None:
         passes=passes,
         max_blocks=args.max_blocks,
     )
-    print(json.dumps(result.__dict__, indent=2, sort_keys=True))
+    rendered = json.dumps(result.__dict__, indent=2, sort_keys=True)
+    if args.output:
+        path = Path(args.output)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(rendered + "\n", encoding="utf-8")
+    print(rendered)
 
 
 if __name__ == "__main__":

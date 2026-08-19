@@ -198,24 +198,67 @@ def strict_past_sparse_memory_attention(
     if bool((writes_before < 0).any()) or bool((writes_before > memory_len).any()):
         raise ValueError("writes_before is outside compact memory-bank bounds")
 
+    # C=1 with a fully valid bank is the dense MemoryTape topology after the
+    # writer projection. Reuse the optimized local-window kernel here instead
+    # of routing every query through the generic compact-bank gather path. This
+    # is numerically equivalent and prevents backend gather overhead from
+    # dominating the C=1 cadence control.
+    dense_writes = torch.arange(
+        seq_len, device=writes_before.device, dtype=writes_before.dtype
+    )[None, :].expand(bsz, -1)
+    if (
+        memory_len == seq_len
+        and bool(memory_mask.all())
+        and torch.equal(writes_before, dense_writes)
+    ):
+        return strict_past_local_attention(
+            query,
+            key,
+            value,
+            window=window,
+            dropout_p=dropout_p,
+            training=training,
+        )
+
     use_window = min(int(window), memory_len)
     offsets = torch.arange(use_window, device=query.device, dtype=writes_before.dtype)
     # Candidate indices are n-W ... n-1.  Negative indices are invalid padding.
     indices = writes_before[:, :, None] - use_window + offsets[None, None, :]
     valid_index = indices >= 0
-    safe_indices = indices.clamp(min=0, max=max(memory_len - 1, 0)).long()
+    safe_counts = writes_before.clamp(min=0, max=memory_len).long()
 
-    # Gather compact memory entries into a per-query local bank [B,Hkv,T,W,D].
-    key_expanded = key[:, :, None, :, :].expand(-1, -1, seq_len, -1, -1)
-    value_expanded = value[:, :, None, :, :].expand(-1, -1, seq_len, -1, -1)
-    gather_index = safe_indices[:, None, :, :, None].expand(
-        -1, hkv, -1, -1, head_dim
+    # Form each compact-bank window once, then select by the number of records
+    # visible before each query.  The previous implementation first expanded
+    # the entire bank to [B,Hkv,T,M,D] and gathered from that view; on MPS the
+    # resulting gather dominated C>1 training despite the expanded view being
+    # logically cheap.  Padding by W gives one window for each possible count
+    # n in [0,M], including the all-padding n=0 window.
+    padded_key = F.pad(key, (0, 0, use_window, 0))
+    padded_value = F.pad(value, (0, 0, use_window, 0))
+    key_windows_by_count = (
+        padded_key.unfold(dimension=2, size=use_window, step=1)
+        .permute(0, 1, 2, 4, 3)[:, :, : memory_len + 1, :, :]
     )
-    key_window = torch.gather(key_expanded, dim=3, index=gather_index)
-    value_window = torch.gather(value_expanded, dim=3, index=gather_index)
+    value_windows_by_count = (
+        padded_value.unfold(dimension=2, size=use_window, step=1)
+        .permute(0, 1, 2, 4, 3)[:, :, : memory_len + 1, :, :]
+    )
+    batch_index = torch.arange(bsz, device=query.device)[:, None].expand(
+        bsz, seq_len
+    )
+    key_window = key_windows_by_count[batch_index, :, safe_counts]
+    value_window = value_windows_by_count[batch_index, :, safe_counts]
+    key_window = key_window.permute(0, 2, 1, 3, 4)
+    value_window = value_window.permute(0, 2, 1, 3, 4)
 
-    gathered_mask = torch.gather(memory_mask, dim=1, index=safe_indices.reshape(bsz, -1))
-    gathered_mask = gathered_mask.reshape(bsz, seq_len, use_window)
+    # SparseTapeBatch masks are prefix-valid, but retain the public function's
+    # arbitrary-mask semantics by selecting the same compact window from the
+    # supplied mask rather than assuming every record is valid.
+    padded_mask = F.pad(memory_mask, (use_window, 0), value=False)
+    mask_windows_by_count = padded_mask.unfold(
+        dimension=1, size=use_window, step=1
+    )[:, : memory_len + 1, :]
+    gathered_mask = mask_windows_by_count[batch_index, safe_counts]
     valid = valid_index & gathered_mask
 
     groups = hq // hkv
