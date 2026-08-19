@@ -13,6 +13,9 @@ _DEFAULT_EXPERIMENT_FIELDS = {
     "prefix_mixin_probability": 0.0,
     "pass_loss_weights_by_k": None,
     "autocast_dtype": None,
+    "memory_write_mode": "periodic",
+    "memory_write_stride": 8,
+    "memory_token_id": None,
 }
 
 # These one-off FBT calibration controls existed in format-v2 checkpoints but

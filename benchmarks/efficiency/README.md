@@ -125,3 +125,10 @@ invalidating the whole precision suite.
 
 Compact retained results live under `benchmarks/efficiency/results/`. See
 `docs/PRECISION.md` for the training precision contract.
+
+## Sparse-memory scaling suite
+
+`benchmarks/efficiency/suites/sparse_memory_scaling.yaml` is an engineering-only
+suite for the architecture branch. It compares dense Tape32, C=1/4/8/16/32
+SparseMemoryTape at W=32, and an initial C=8 hybrid case. These rows characterize
+throughput/VRAM only; they do **not** select the scientific write cadence.

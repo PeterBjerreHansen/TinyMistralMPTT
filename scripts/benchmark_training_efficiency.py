@@ -182,6 +182,11 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
     model_dir = str(case.get("model_dir", DEFAULT_MODEL_DIR))
     attention_backend = str(case.get("attention_backend", "auto"))
     memory_window = int(case.get("memory_window", 32))
+    memory_write_mode = str(case.get("memory_write_mode", "periodic"))
+    memory_write_stride = int(case.get("memory_write_stride", 8))
+    memory_token_id = case.get("memory_token_id")
+    if memory_token_id is not None:
+        memory_token_id = int(memory_token_id)
 
     if passes not in WEIGHTS_BY_K:
         raise ValueError("efficiency benchmark currently supports K=1,2,3")
@@ -211,6 +216,10 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
         "parameter_dtype": parameter_dtype,
         "autocast_dtype": autocast_dtype,
         "attention_backend": attention_backend,
+        "memory_window": memory_window,
+        "memory_write_mode": memory_write_mode,
+        "memory_write_stride": memory_write_stride,
+        "memory_token_id": memory_token_id,
         "warmup_steps": warmup_steps,
         "measure_steps": measure_steps,
         "status": "running",
@@ -228,6 +237,9 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
             attention_backend=attention_backend,
             architecture_seed=4242,
             memory_window=memory_window,
+            memory_write_mode=memory_write_mode,
+            memory_write_stride=memory_write_stride,
+            memory_token_id=memory_token_id,
         )
         configure_phase(model, "B")
         model.train()

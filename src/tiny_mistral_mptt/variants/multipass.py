@@ -115,13 +115,23 @@ class MultiPassVariant(ExperimentalVariant):
         """Process one token from an already-strict-past feedback memory."""
         raise NotImplementedError
 
-    def _feedback_memory_from_hidden(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    def _feedback_memory_from_hidden(
+        self,
+        hidden_states: torch.Tensor,
+        *,
+        input_ids: torch.Tensor | None = None,
+    ):
         """Compress a stream history to the state needed by the next pass/token."""
         raise NotImplementedError
 
     def _append_feedback_memory(
-        self, feedback_memory: torch.Tensor, new_hidden: torch.Tensor
-    ) -> torch.Tensor:
+        self,
+        feedback_memory,
+        new_hidden: torch.Tensor,
+        *,
+        token: torch.Tensor | None = None,
+        position: int | None = None,
+    ):
         """Append one newly produced stream state to its retained feedback memory."""
         raise NotImplementedError
 

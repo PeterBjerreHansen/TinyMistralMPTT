@@ -1,6 +1,7 @@
 # TinyMistralMPTT
 
-Research code for MemoryAdd, MemoryTape32, and recurrent inference on a
+Research code for MemoryAdd, MemoryTape32, SparseMemoryTape, the simple
+MemoryAdd+SparseTape hybrid, and recurrent inference on a
 validated TinyMistral backbone.
 
 ## Repository map
@@ -72,3 +73,11 @@ uv run python scripts/verify_data.py data/dolmino/local_2048
 Run engineering efficiency batteries using the targets documented in
 `benchmarks/efficiency/`. Before paid CUDA training, follow `docs/CLOUD.md` and
 run the provider-agnostic cloud preflight against the exact intended config.
+
+
+## Sparse-memory architecture branch
+
+The `sparse-memory-v1` development snapshot adds `sparse_memory_tape` and
+`memory_add_sparse_tape`. See `docs/SPARSE_MEMORY_V1.md` and
+`docs/ARCHITECTURES.md`. These models are experimental and are not part of the current dense Add/Tape
+qualification or any locked core campaign.

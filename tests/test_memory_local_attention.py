@@ -118,3 +118,54 @@ def test_memory_bank_attention_empty_bank_is_exact_zero():
     v = torch.empty(2, 2, 0, 8)
     actual = memory_bank_attention(q, k, v)
     torch.testing.assert_close(actual, torch.zeros_like(q), atol=0, rtol=0)
+
+
+def test_masked_memory_bank_returns_zero_for_empty_rows_without_nan():
+    from tiny_mistral_mptt.attention.memory_local import memory_bank_attention
+
+    torch.manual_seed(2)
+    q = torch.randn(2, 4, 1, 3)
+    k = torch.randn(2, 2, 4, 3)
+    v = torch.randn(2, 2, 4, 3)
+    mask = torch.tensor([[False, False, False, False], [True, False, True, False]])
+    out = memory_bank_attention(q, k, v, memory_mask=mask)
+    assert torch.isfinite(out).all()
+    torch.testing.assert_close(out[0], torch.zeros_like(out[0]), atol=0, rtol=0)
+    assert out[1].abs().sum() > 0
+
+
+def test_sparse_attention_c1_matches_strict_local_attention():
+    from tiny_mistral_mptt.attention.memory_local import (
+        strict_past_local_attention,
+        strict_past_sparse_memory_attention,
+    )
+
+    torch.manual_seed(3)
+    q = torch.randn(1, 4, 7, 3)
+    k = torch.randn(1, 2, 7, 3)
+    v = torch.randn(1, 2, 7, 3)
+    writes_before = torch.arange(7)[None, :]
+    mask = torch.ones(1, 7, dtype=torch.bool)
+    dense = strict_past_local_attention(q, k, v, window=4)
+    sparse = strict_past_sparse_memory_attention(
+        q, k, v, writes_before=writes_before, memory_mask=mask, window=4
+    )
+    torch.testing.assert_close(sparse, dense, atol=0, rtol=0)
+
+
+def test_sparse_attention_window_counts_records_not_source_distance():
+    from tiny_mistral_mptt.attention.memory_local import strict_past_sparse_memory_attention
+
+    # One query head/KV head and scalar head dimension makes the retention test
+    # easy to audit. Query t=5 has four committed records, but W=2 means only
+    # records 2 and 3 may affect it.
+    q = torch.ones(1, 1, 6, 1)
+    k = torch.zeros(1, 1, 4, 1)
+    v = torch.tensor([[[[100.0], [200.0], [3.0], [5.0]]]])
+    writes_before = torch.tensor([[0, 1, 1, 2, 3, 4]])
+    mask = torch.ones(1, 4, dtype=torch.bool)
+    out = strict_past_sparse_memory_attention(
+        q, k, v, writes_before=writes_before, memory_mask=mask, window=2
+    )
+    # Equal keys => uniform attention over the two retained records: (3+5)/2.
+    torch.testing.assert_close(out[0, 0, 5, 0], torch.tensor(4.0), atol=0, rtol=0)

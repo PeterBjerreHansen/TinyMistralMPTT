@@ -14,7 +14,7 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 from tiny_mistral.device import resolve_device
 from tiny_mistral_mptt.config import load_experiment_config
 from tiny_mistral_mptt.evaluation.lm_eval_adapter import make_lm_eval_adapter
-from tiny_mistral_mptt.model_factory import load_variant
+from tiny_mistral_mptt.model_factory import load_variant_from_config
 
 
 def main() -> None:
@@ -36,16 +36,7 @@ def main() -> None:
 
     cfg = load_experiment_config(args.config)
     device = resolve_device(cfg.device)
-    model = load_variant(
-        cfg.variant,
-        cfg.model_dir,
-        device=device,
-        dtype=cfg.dtype,
-        attention_backend=cfg.attention_backend,
-        architecture_seed=cfg.architecture_seed,
-        memory_window=cfg.memory_window,
-        prefix_mixin_probability=cfg.prefix_mixin_probability,
-    )
+    model = load_variant_from_config(cfg, device=device)
     if args.checkpoint:
         payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
         model.load_state_dict(payload["model"], strict=True)

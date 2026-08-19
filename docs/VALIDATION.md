@@ -99,3 +99,16 @@ optimizer-batch tokens, optimizer-step throughput, unique-token throughput, and
 memory telemetry. The trainer records the same batching semantics in `run.json`
 and per-update metrics. Finally run `scripts/cloud_preflight.py` against the
 exact intended paid-run config.
+
+### Sparse-memory gates
+
+The sparse-memory branch additionally requires:
+
+- C=1 identity-writer equivalence to dense MemoryTape32;
+- strict read-before-write visibility for periodic and token triggers;
+- record-count (not source-token-distance) window semantics;
+- masked empty sparse banks with exact-zero, finite output;
+- Phase-A gradients through writer and readers with a frozen backbone;
+- exact cached/full-prefix agreement for SparseMemoryTape and the hybrid;
+- hybrid decomposition into its MemoryAdd and SparseTape components;
+- bounded sparse cached banks and per-example token-triggered writes.

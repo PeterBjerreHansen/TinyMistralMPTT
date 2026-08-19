@@ -75,3 +75,34 @@ def test_bfloat16_autocast_requires_fp32_parameter_storage():
 def test_unvalidated_autocast_dtype_is_rejected():
     with pytest.raises(ValueError, match="autocast_dtype"):
         _config(autocast_dtype="float16")
+
+
+
+def test_sparse_memory_config_requires_coherent_write_policy():
+    cfg = _config(
+        variant="sparse_memory_tape",
+        memory_write_mode="periodic",
+        memory_write_stride=4,
+    )
+    assert cfg.memory_write_stride == 4
+
+    cfg = _config(
+        variant="memory_add_sparse_tape",
+        memory_write_mode="token",
+        memory_token_id=7,
+    )
+    assert cfg.memory_token_id == 7
+
+    with pytest.raises(ValueError, match="requires memory_token_id"):
+        _config(variant="sparse_memory_tape", memory_write_mode="token")
+    with pytest.raises(ValueError, match="must not set memory_token_id"):
+        _config(
+            variant="sparse_memory_tape",
+            memory_write_mode="periodic",
+            memory_token_id=7,
+        )
+
+
+def test_sparse_write_fields_cannot_silently_change_other_variants():
+    with pytest.raises(ValueError, match=r"memory_write_\* fields"):
+        _config(variant="memory_add", memory_write_stride=4)

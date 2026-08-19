@@ -13,9 +13,11 @@ from tiny_mistral_mptt.config import load_experiment_config
 from tiny_mistral_mptt.data.manifest import file_sha256
 from tiny_mistral_mptt.data.packed_dataset import PackedTokenDataset
 from tiny_mistral_mptt.evaluation.recurrent import evaluate_recurrent_continuation
-from tiny_mistral_mptt.model_factory import load_variant
+from tiny_mistral_mptt.model_factory import load_variant_from_config
 from tiny_mistral_mptt.variants.memory_add import MemoryAddVariant
+from tiny_mistral_mptt.variants.memory_add_sparse_tape import MemoryAddSparseTapeVariant
 from tiny_mistral_mptt.variants.memory_tape32 import MemoryTape32Variant
+from tiny_mistral_mptt.variants.sparse_memory_tape import SparseMemoryTapeVariant
 
 
 def main() -> None:
@@ -51,22 +53,19 @@ def main() -> None:
         raise SystemExit("--prefill-passes values must be positive")
 
     cfg = load_experiment_config(args.config)
-    if cfg.variant not in {"memory_add", "memory_tape32"}:
-        raise SystemExit(
-            "evaluate_recurrent_inference supports variant=memory_add or memory_tape32"
-        )
+    if cfg.variant not in {
+        "memory_add",
+        "memory_tape32",
+        "sparse_memory_tape",
+        "memory_add_sparse_tape",
+    }:
+        raise SystemExit("evaluate_recurrent_inference requires a cached-memory variant")
     device = resolve_device(cfg.device)
-    model = load_variant(
-        cfg.variant,
-        cfg.model_dir,
-        device=device,
-        dtype=cfg.dtype,
-        attention_backend=cfg.attention_backend,
-        architecture_seed=cfg.architecture_seed,
-        memory_window=cfg.memory_window,
-        prefix_mixin_probability=cfg.prefix_mixin_probability,
-    )
-    if not isinstance(model, (MemoryAddVariant, MemoryTape32Variant)):
+    model = load_variant_from_config(cfg, device=device)
+    if not isinstance(
+        model,
+        (MemoryAddVariant, MemoryTape32Variant, SparseMemoryTapeVariant, MemoryAddSparseTapeVariant),
+    ):
         raise SystemExit("loaded variant does not implement recurrent memory inference")
 
     payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)

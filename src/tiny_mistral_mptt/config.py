@@ -8,7 +8,14 @@ from typing import Any
 import yaml
 
 
-SUPPORTED_VARIANTS = {"vanilla", "fbt", "memory_add", "memory_tape32"}
+SUPPORTED_VARIANTS = {
+    "vanilla",
+    "fbt",
+    "memory_add",
+    "memory_tape32",
+    "sparse_memory_tape",
+    "memory_add_sparse_tape",
+}
 SUPPORTED_LR_SCHEDULES = {"constant", "cosine", "piecewise_linear"}
 SUPPORTED_AUTOCAST_DTYPES = {"bfloat16"}
 
@@ -174,6 +181,9 @@ class ExperimentConfig:
     pass_loss_weights: list[float] | None = None
     pass_loss_weights_by_k: dict[int, list[float]] | None = None
     memory_window: int = 32
+    memory_write_mode: str = "periodic"
+    memory_write_stride: int = 8
+    memory_token_id: int | None = None
     prefix_mixin_probability: float = 0.0
 
     # ``resume_from`` restores the exact run. ``init_from`` loads model weights
@@ -254,6 +264,27 @@ class ExperimentConfig:
             raise ValueError("checkpoint_every_tokens must be non-negative")
         if self.memory_window <= 0:
             raise ValueError("memory_window must be positive")
+        sparse_variants = {"sparse_memory_tape", "memory_add_sparse_tape"}
+        if self.variant in sparse_variants:
+            if self.memory_write_mode not in {"periodic", "token"}:
+                raise ValueError("memory_write_mode must be 'periodic' or 'token'")
+            if self.memory_write_stride <= 0:
+                raise ValueError("memory_write_stride must be positive")
+            if self.memory_write_mode == "periodic" and self.memory_token_id is not None:
+                raise ValueError("periodic sparse memory must not set memory_token_id")
+            if self.memory_write_mode == "token" and self.memory_token_id is None:
+                raise ValueError("token sparse memory requires memory_token_id")
+            if self.memory_token_id is not None and int(self.memory_token_id) < 0:
+                raise ValueError("memory_token_id must be non-negative")
+        else:
+            if (
+                self.memory_write_mode != "periodic"
+                or self.memory_write_stride != 8
+                or self.memory_token_id is not None
+            ):
+                raise ValueError(
+                    "memory_write_* fields are supported only for sparse-memory variants"
+                )
         if (
             not math.isfinite(float(self.prefix_mixin_probability))
             or not 0.0 <= float(self.prefix_mixin_probability) <= 1.0

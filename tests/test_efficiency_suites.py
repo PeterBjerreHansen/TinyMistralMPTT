@@ -19,6 +19,7 @@ def test_efficiency_suites_are_explicit_and_non_scientific():
         "precision_mps.yaml",
         "precision_cuda.yaml",
         "cuda_batch_qualification.yaml",
+        "sparse_memory_scaling.yaml",
     }
     assert {path.name for path in SUITES.glob("*.yaml")} == expected
     assert (ROOT / "benchmarks" / "efficiency" / "README.md").exists()
@@ -32,7 +33,13 @@ def test_efficiency_suite_cases_have_required_dimensions():
         assert cases
         for case in cases:
             merged = {**defaults, **case}
-            assert merged["variant"] in {"vanilla", "memory_add", "memory_tape32"}
+            assert merged["variant"] in {
+                "vanilla",
+                "memory_add",
+                "memory_tape32",
+                "sparse_memory_tape",
+                "memory_add_sparse_tape",
+            }
             assert merged["passes"] in {1, 2, 3}
             assert merged["sequence_length"] > 0
             assert merged["batch_size"] > 0

@@ -74,7 +74,7 @@ def prefill_exact(
         streams = tuple(
             PassStreamState(
                 past_key_values=cache,
-                feedback_memory=model._feedback_memory_from_hidden(hidden),
+                feedback_memory=model._feedback_memory_from_hidden(hidden, input_ids=input_ids),
                 last_hidden=hidden[:, -1:, :].detach(),
             )
             for hidden, cache in zip(hidden_sequences, caches, strict=True)
@@ -137,6 +137,7 @@ def exact_decode_step(
     # Crucial causality rule: all pass-k computations below read the *old*
     # stream-(k-1) memory.  Newly produced same-position states are not exposed
     # until every stream has completed this token.
+    position = state.next_position
     token_embedding = model.backbone.model.embed_tokens(token)
     new_hiddens: list[torch.Tensor] = []
     new_caches = []
@@ -172,6 +173,8 @@ def exact_decode_step(
                 feedback_memory=model._append_feedback_memory(
                     old_stream.feedback_memory,
                     hidden,
+                    token=token,
+                    position=position,
                 ),
                 last_hidden=hidden[:, -1:, :].detach(),
             )
@@ -200,6 +203,7 @@ def recurrent_decode_step(
     batch_size = state.next_token_logits.shape[0]
     _validate_token(token, batch_size)
 
+    position = state.next_position
     if not state.feedback_enabled:
         hidden, cache = model._run_first_token_cached(token, state.past_key_values)
         feedback_memory = None
@@ -214,6 +218,8 @@ def recurrent_decode_step(
         feedback_memory = model._append_feedback_memory(
             state.feedback_memory,
             hidden,
+            token=token,
+            position=position,
         )
 
     logits = model.backbone.lm_head(hidden[:, -1:, :]).float()[:, -1, :]

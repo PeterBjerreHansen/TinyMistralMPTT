@@ -49,3 +49,9 @@ Pass-depth, memory-intervention, and recurrent-inference programs are reusable
 checkpoint diagnostics. Their existence does not imply a dedicated benchmark
 study. Script names describe operations directly and never encode a historical
 campaign.
+
+Sparse-memory variants use the same training/pass-depth/recurrent scripts as the
+dense models. `evaluate_memory_interventions.py` also decomposes the hybrid's
+fast MemoryAdd source and sparse-tape source independently. Token-triggered
+write mode is model-supported but requires an explicit data/token protocol
+before it should be used for a real study.

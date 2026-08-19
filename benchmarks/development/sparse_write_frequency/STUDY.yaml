@@ -1,0 +1,8 @@
+name: sparse_write_frequency
+status: planned
+question: >
+  How far can MemoryTape write frequency be reduced, at a fixed addressable
+  memory window, while preserving useful recurrent signal and improving the
+  represented temporal span per retained tape record?
+arms: []
+comparisons: []

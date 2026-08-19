@@ -7,7 +7,11 @@ import torch.nn as nn
 
 from tiny_mistral.modeling import LayerKVCache, MistralForCausalLM, MistralRMSNorm
 
-from ..attention.memory_local import memory_bank_attention, strict_past_local_attention
+from ..attention.memory_local import (
+    memory_bank_attention,
+    strict_past_local_attention,
+    strict_past_sparse_memory_attention,
+)
 from .multipass import MultiPassVariant
 
 
@@ -113,6 +117,8 @@ class MemoryTapeReader(nn.Module):
         self,
         hidden_states: torch.Tensor,
         memory_states: torch.Tensor,
+        *,
+        memory_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Attend to a bank whose entries are already strictly in the past."""
         if hidden_states.ndim != 3 or hidden_states.shape[1] != 1:
@@ -125,6 +131,33 @@ class MemoryTapeReader(nn.Module):
             query,
             key,
             value,
+            memory_mask=memory_mask,
+            dropout_p=self.dropout_p,
+            training=self.training,
+        )
+        output = output.transpose(1, 2).contiguous().view(bsz, query_len, -1)
+        return self.o_proj(output)
+
+    def forward_sparse(
+        self,
+        hidden_states: torch.Tensor,
+        memory_states: torch.Tensor,
+        *,
+        writes_before: torch.Tensor,
+        memory_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Attend to the last ``window`` committed records at each query token."""
+        if hidden_states.ndim != 3 or memory_states.ndim != 3:
+            raise ValueError("hidden_states and memory_states must be [B,T,D]")
+        bsz, query_len, _ = hidden_states.shape
+        query, key, value = self._project(hidden_states, memory_states)
+        output = strict_past_sparse_memory_attention(
+            query,
+            key,
+            value,
+            writes_before=writes_before,
+            memory_mask=memory_mask,
+            window=self.window,
             dropout_p=self.dropout_p,
             training=self.training,
         )
@@ -308,15 +341,27 @@ class MemoryTape32Variant(MultiPassVariant):
             raise RuntimeError("cached MemoryTape32 token did not return KV state")
         return hidden, cache
 
-    def _feedback_memory_from_hidden(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    def _feedback_memory_from_hidden(
+        self,
+        hidden_states: torch.Tensor,
+        *,
+        input_ids: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        del input_ids
         if hidden_states.ndim != 3 or hidden_states.shape[1] < 1:
             raise ValueError("hidden_states must be non-empty [B,T,D]")
         keep = min(self.memory_window, hidden_states.shape[1])
         return hidden_states[:, -keep:, :].detach()
 
     def _append_feedback_memory(
-        self, feedback_memory: torch.Tensor, new_hidden: torch.Tensor
+        self,
+        feedback_memory: torch.Tensor,
+        new_hidden: torch.Tensor,
+        *,
+        token: torch.Tensor | None = None,
+        position: int | None = None,
     ) -> torch.Tensor:
+        del token, position
         if feedback_memory.ndim != 3 or new_hidden.ndim != 3:
             raise ValueError("feedback memory and new hidden must be [B,T,D]")
         if new_hidden.shape[1] != 1:

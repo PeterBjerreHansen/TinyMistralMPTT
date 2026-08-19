@@ -1,8 +1,8 @@
 # K-general incremental and recurrent inference
 
-This document defines the cached inference contract for `memory_add` and
-`memory_tape32`. The implementation is intentionally independent of the current
-K=2 training protocol: prompt refinement depth is an inference-time
+This document defines the cached inference contract for `memory_add`,
+`memory_tape32`, `sparse_memory_tape`, and `memory_add_sparse_tape`. The
+implementation is intentionally independent of the current K=2 training protocol: prompt refinement depth is an inference-time
 hyperparameter `K >= 1`.
 
 ## Two modes
@@ -74,9 +74,10 @@ Free-running recurrent sampling should be added only after teacher-forced drift
 has been measured and the explicit inference path is trusted on the target
 hardware.
 
-MemoryAdd and MemoryTape32 explicitly opt into cached feedback. FBT currently
-supports only the K=1 vanilla cached boundary; requesting K>1 through the cached
-inference API raises a clear capability error.
+MemoryAdd, MemoryTape32, SparseMemoryTape, and MemoryAddSparseTape explicitly
+opt into cached feedback. FBT currently supports only the K=1 vanilla cached
+boundary; requesting K>1 through the cached inference API raises a clear
+capability error.
 
 ## Teacher-forced evaluator
 
@@ -136,7 +137,25 @@ Before interpreting recurrent NLL, the following must remain green:
 - the first processed recurrent token equals the exact-K token step;
 - MemoryAdd retains exactly one feedback vector;
 - MemoryTape32 retains an ordered ring no longer than its memory window;
+- SparseMemoryTape retains at most `memory_window` committed records and honors
+  per-example write triggers;
+- the hybrid updates its fast hidden every token but changes its tape only on a
+  write event;
 - no same-position source state is exposed during exact K-stream updates;
 - cached absolute positions remain correct beyond the TinyMistral SWA window;
 - CPU/reference tests pass and the checked-in MPS smoke tests pass on Apple
   hardware.
+
+## Sparse tape and hybrid cached state
+
+SparseMemoryTape uses a fixed-capacity `SparseTapeState(memories, valid)` during
+cached inference. `valid` makes empty/padded slots explicit, including
+per-example token-triggered write histories. Every decode transition snapshots
+the old bank, computes the token from that strict-past bank, and only then
+appends a new writer output when the current token/position triggers a write.
+
+`MemoryAddSparseTape` carries `HybridFeedbackState(fast_hidden, tape)`. The fast
+hidden is replaced after every token; the sparse tape follows the same
+conditional append rule. Exact K-stream inference still snapshots every lower
+stream before same-position updates, and recurrent collapse seeds the final
+stream from pass K-1 exactly as for the existing dense models.

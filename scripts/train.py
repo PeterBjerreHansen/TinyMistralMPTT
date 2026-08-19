@@ -5,7 +5,7 @@ import argparse
 from tiny_mistral.device import resolve_device
 from tiny_mistral_mptt.config import load_experiment_config
 from tiny_mistral_mptt.data.packed_dataset import PackedTokenDataset
-from tiny_mistral_mptt.model_factory import load_variant
+from tiny_mistral_mptt.model_factory import load_variant_from_config
 from tiny_mistral_mptt.training.trainer import Trainer
 
 
@@ -39,16 +39,7 @@ def main() -> None:
     cfg.validate()
 
     device = resolve_device(cfg.device)
-    model = load_variant(
-        cfg.variant,
-        cfg.model_dir,
-        device=device,
-        dtype=cfg.dtype,
-        attention_backend=cfg.attention_backend,
-        architecture_seed=cfg.architecture_seed,
-        memory_window=cfg.memory_window,
-        prefix_mixin_probability=cfg.prefix_mixin_probability,
-    )
+    model = load_variant_from_config(cfg, device=device)
     train_data = PackedTokenDataset(cfg.data_dir, "train")
     validation_data = PackedTokenDataset(cfg.data_dir, "validation")
 

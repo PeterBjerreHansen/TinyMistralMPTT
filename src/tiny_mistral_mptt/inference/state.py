@@ -6,6 +6,8 @@ import torch
 
 from tiny_mistral.modeling import LayerKVCache
 
+from ..feedback import FeedbackMemory, feedback_shape
+
 
 KVCache = tuple[LayerKVCache, ...]
 
@@ -25,17 +27,16 @@ class PassStreamState:
     """One causal pass stream used by exact incremental K-pass inference."""
 
     past_key_values: KVCache
-    feedback_memory: torch.Tensor
+    feedback_memory: FeedbackMemory
     last_hidden: torch.Tensor
 
     def __post_init__(self) -> None:
-        if self.feedback_memory.ndim != 3:
-            raise ValueError("feedback_memory must be [B,M,D]")
         if self.last_hidden.ndim != 3 or self.last_hidden.shape[1] != 1:
             raise ValueError("last_hidden must be [B,1,D]")
-        if self.feedback_memory.shape[0] != self.last_hidden.shape[0]:
+        batch_size, hidden_size = feedback_shape(self.feedback_memory)
+        if batch_size != self.last_hidden.shape[0]:
             raise ValueError("feedback memory and last hidden batch sizes differ")
-        if self.feedback_memory.shape[-1] != self.last_hidden.shape[-1]:
+        if hidden_size != self.last_hidden.shape[-1]:
             raise ValueError("feedback memory and last hidden dimensions differ")
         cache_next_position(self.past_key_values)
 
@@ -77,7 +78,7 @@ class RecurrentState:
 
     prefill_passes: int
     past_key_values: KVCache
-    feedback_memory: torch.Tensor | None
+    feedback_memory: FeedbackMemory | None
     last_hidden: torch.Tensor
     next_token_logits: torch.Tensor
 
@@ -95,11 +96,12 @@ class RecurrentState:
             if self.feedback_memory is not None:
                 raise ValueError("K=1 recurrent state must not enable feedback")
         else:
-            if self.feedback_memory is None or self.feedback_memory.ndim != 3:
-                raise ValueError("K>1 recurrent state requires [B,M,D] feedback memory")
-            if self.feedback_memory.shape[0] != self.last_hidden.shape[0]:
+            if self.feedback_memory is None:
+                raise ValueError("K>1 recurrent state requires feedback memory")
+            batch_size, hidden_size = feedback_shape(self.feedback_memory)
+            if batch_size != self.last_hidden.shape[0]:
                 raise ValueError("feedback memory and hidden batch sizes differ")
-            if self.feedback_memory.shape[-1] != self.last_hidden.shape[-1]:
+            if hidden_size != self.last_hidden.shape[-1]:
                 raise ValueError("feedback memory and hidden dimensions differ")
 
     @property

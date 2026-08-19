@@ -137,3 +137,25 @@ Full held-out evaluations should be run from preserved checkpoints. During a
 locked main run, diagnostics are read-only: they describe the trajectory and do
 not trigger architecture-specific LR or objective changes except for genuine
 engineering failure.
+
+
+## Sparse-memory architecture knobs
+
+The sparse-memory branch adds three config fields. They are architecture
+settings, not selected hyperparameters:
+
+```yaml
+memory_window: 32          # number of addressable committed records
+memory_write_mode: periodic
+memory_write_stride: 8     # candidate cadence C, not a selected default
+```
+
+Token-triggered mode instead sets `memory_write_mode: token` and a
+`memory_token_id`. The model implementation supports that timing contract, but
+current Dolmino recipes do not insert a new memory token. Do not run a real
+token-triggered study until the tokenizer/data/loss treatment is explicitly
+defined.
+
+For periodic mode, a write at position `t` is committed only after that token's
+computation, so it becomes readable from `t+1`. `memory_window` always counts
+records rather than source-token distance.

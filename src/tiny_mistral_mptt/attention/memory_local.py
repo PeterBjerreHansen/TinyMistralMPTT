@@ -92,19 +92,16 @@ def memory_bank_attention(
     key: torch.Tensor,
     value: torch.Tensor,
     *,
+    memory_mask: torch.Tensor | None = None,
     dropout_p: float = 0.0,
     training: bool = False,
 ) -> torch.Tensor:
     """GQA attention from arbitrary queries into an already-strict-past bank.
 
-    Unlike :func:`strict_past_local_attention`, the memory positions supplied
-    here are *already known* to precede every query position.  This is the
-    cached-decoding primitive used by MemoryTape32: a one-token query attends
-    to the retained tail of the previous stream without introducing a
-    same-position key.
-
-    Shapes are ``query=[B,Hq,Q,D]`` and ``key=value=[B,Hkv,M,D]``.  ``M`` may
-    be zero, in which case the result is an exact zero tensor.
+    ``memory_mask`` optionally marks valid bank entries with shape ``[B,M]``.
+    This is used by sparse cached inference, where different examples may have
+    different numbers of committed memories.  Empty/all-masked banks return an
+    exact zero tensor without producing NaNs.
     """
     if query.ndim != 4 or key.ndim != 4 or value.ndim != 4:
         raise ValueError("query/key/value must be [B,H,T,D]")
@@ -120,6 +117,9 @@ def memory_bank_attention(
     bsz, hq, query_len, head_dim = query.shape
     hkv = key.shape[1]
     memory_len = key.shape[-2]
+    if memory_mask is not None:
+        if memory_mask.shape != (bsz, memory_len) or memory_mask.dtype != torch.bool:
+            raise ValueError("memory_mask must be bool [B,M]")
     if memory_len == 0:
         return torch.zeros_like(query)
 
@@ -130,9 +130,115 @@ def memory_bank_attention(
     scores = torch.matmul(grouped_query, grouped_key.transpose(-2, -1))
     scores = scores / math.sqrt(head_dim)  # [B,Hkv,G,Q,M]
 
+    if memory_mask is None:
+        valid = torch.ones((bsz, memory_len), dtype=torch.bool, device=query.device)
+    else:
+        valid = memory_mask.to(device=query.device)
+    scores = scores.masked_fill(
+        ~valid[:, None, None, None, :], torch.finfo(scores.dtype).min
+    )
     probabilities = F.softmax(scores, dim=-1, dtype=torch.float32).to(query.dtype)
+    probabilities = probabilities * valid[:, None, None, None, :].to(probabilities.dtype)
+    denominator = probabilities.sum(dim=-1, keepdim=True)
+    probabilities = torch.where(
+        denominator > 0,
+        probabilities / denominator.clamp_min(torch.finfo(probabilities.dtype).tiny),
+        torch.zeros_like(probabilities),
+    )
     if dropout_p:
         probabilities = F.dropout(probabilities, p=dropout_p, training=training)
 
     output = torch.matmul(probabilities, grouped_value)  # [B,Hkv,G,Q,D]
     return output.contiguous().reshape(bsz, hq, query_len, head_dim)
+
+
+def strict_past_sparse_memory_attention(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    *,
+    writes_before: torch.Tensor,
+    memory_mask: torch.Tensor,
+    window: int,
+    dropout_p: float = 0.0,
+    training: bool = False,
+) -> torch.Tensor:
+    """O(T*W) GQA attention to the last ``W`` committed sparse memories.
+
+    ``key``/``value`` are compact chronological memory records ``[B,Hkv,M,D]``.
+    ``writes_before[b,t]`` is the number of records committed strictly before
+    query position ``t``.  Therefore a memory written at position ``t`` is
+    invisible to the query at ``t`` and first becomes visible at ``t+1``.
+    ``memory_mask`` is bool ``[B,M]`` for padded compact banks.
+    """
+    if query.ndim != 4 or key.ndim != 4 or value.ndim != 4:
+        raise ValueError("query/key/value must be [B,H,T,D]")
+    if key.shape != value.shape:
+        raise ValueError("key and value shapes must match")
+    if query.shape[0] != key.shape[0] or query.shape[-1] != key.shape[-1]:
+        raise ValueError("query/key batch and head dimensions must align")
+    if query.shape[1] % key.shape[1] != 0:
+        raise ValueError("query head count must be divisible by KV head count")
+    if window <= 0:
+        raise ValueError("window must be positive")
+    if not 0.0 <= dropout_p < 1.0:
+        raise ValueError("dropout_p must be in [0,1)")
+
+    bsz, hq, seq_len, head_dim = query.shape
+    hkv = key.shape[1]
+    memory_len = key.shape[-2]
+    if writes_before.shape != (bsz, seq_len):
+        raise ValueError("writes_before must be [B,T]")
+    if memory_mask.shape != (bsz, memory_len) or memory_mask.dtype != torch.bool:
+        raise ValueError("memory_mask must be bool [B,M]")
+    if memory_len == 0:
+        return torch.zeros_like(query)
+    if writes_before.dtype not in (torch.int32, torch.int64):
+        raise ValueError("writes_before must have integer dtype")
+    if bool((writes_before < 0).any()) or bool((writes_before > memory_len).any()):
+        raise ValueError("writes_before is outside compact memory-bank bounds")
+
+    use_window = min(int(window), memory_len)
+    offsets = torch.arange(use_window, device=query.device, dtype=writes_before.dtype)
+    # Candidate indices are n-W ... n-1.  Negative indices are invalid padding.
+    indices = writes_before[:, :, None] - use_window + offsets[None, None, :]
+    valid_index = indices >= 0
+    safe_indices = indices.clamp(min=0, max=max(memory_len - 1, 0)).long()
+
+    # Gather compact memory entries into a per-query local bank [B,Hkv,T,W,D].
+    key_expanded = key[:, :, None, :, :].expand(-1, -1, seq_len, -1, -1)
+    value_expanded = value[:, :, None, :, :].expand(-1, -1, seq_len, -1, -1)
+    gather_index = safe_indices[:, None, :, :, None].expand(
+        -1, hkv, -1, -1, head_dim
+    )
+    key_window = torch.gather(key_expanded, dim=3, index=gather_index)
+    value_window = torch.gather(value_expanded, dim=3, index=gather_index)
+
+    gathered_mask = torch.gather(memory_mask, dim=1, index=safe_indices.reshape(bsz, -1))
+    gathered_mask = gathered_mask.reshape(bsz, seq_len, use_window)
+    valid = valid_index & gathered_mask
+
+    groups = hq // hkv
+    grouped_query = query.reshape(bsz, hkv, groups, seq_len, head_dim)
+    q = grouped_query.permute(0, 1, 3, 2, 4)  # [B,Hkv,T,G,D]
+    scores = torch.matmul(q, key_window.transpose(-2, -1))
+    scores = scores.permute(0, 1, 3, 2, 4) / math.sqrt(head_dim)
+    scores = scores.masked_fill(
+        ~valid[:, None, None, :, :], torch.finfo(scores.dtype).min
+    )
+
+    probabilities = F.softmax(scores, dim=-1, dtype=torch.float32).to(query.dtype)
+    probabilities = probabilities * valid[:, None, None, :, :].to(probabilities.dtype)
+    denominator = probabilities.sum(dim=-1, keepdim=True)
+    probabilities = torch.where(
+        denominator > 0,
+        probabilities / denominator.clamp_min(torch.finfo(probabilities.dtype).tiny),
+        torch.zeros_like(probabilities),
+    )
+    if dropout_p:
+        probabilities = F.dropout(probabilities, p=dropout_p, training=training)
+
+    p = probabilities.permute(0, 1, 3, 2, 4)  # [B,Hkv,T,G,W]
+    output = torch.matmul(p, value_window)  # [B,Hkv,T,G,D]
+    output = output.permute(0, 1, 3, 2, 4).contiguous()
+    return output.reshape(bsz, hq, seq_len, head_dim)

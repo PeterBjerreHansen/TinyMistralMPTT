@@ -3,7 +3,8 @@
   efficiency-mps efficiency-cuda efficiency-mps-training efficiency-mps-precision \
   efficiency-mps-context efficiency-mps-batch efficiency-cuda-training \
   efficiency-cuda-precision efficiency-cuda-context efficiency-cuda-batch \
-  efficiency-cuda-batch-qualification select-cuda-batch cloud-preflight
+  efficiency-cuda-batch-qualification efficiency-sparse-memory \
+  select-cuda-batch cloud-preflight
 
 test:
 	uv run pytest -q
@@ -97,6 +98,14 @@ efficiency-cuda-batch:
 	uv run python scripts/benchmark_training_efficiency.py \
 		--suite benchmarks/efficiency/suites/batch_scaling.yaml --device cuda --autocast-dtype bfloat16 \
 		--output benchmarks/efficiency/results/generated/cuda_batch.json
+
+
+# Engineering-only sparse-memory cadence/reader scaling. This does not select C.
+efficiency-sparse-memory:
+	uv run python scripts/benchmark_training_efficiency.py \
+		--suite benchmarks/efficiency/suites/sparse_memory_scaling.yaml \
+		--device cuda --autocast-dtype bfloat16 \
+		--output benchmarks/efficiency/results/generated/sparse_memory_scaling.json
 
 # Core-run batching qualification. This keeps grad accumulation at 1 so the
 # hardware microbatch axis is measured without silently changing optimizer batch.

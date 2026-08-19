@@ -11,7 +11,7 @@ from tiny_mistral_mptt.config import load_experiment_config
 from tiny_mistral_mptt.data.manifest import file_sha256
 from tiny_mistral_mptt.data.packed_dataset import PackedTokenDataset
 from tiny_mistral_mptt.evaluation.pass_depth import evaluate_pass_depth
-from tiny_mistral_mptt.model_factory import load_variant
+from tiny_mistral_mptt.model_factory import load_variant_from_config
 from tiny_mistral_mptt.variants.multipass import MultiPassVariant
 
 
@@ -25,16 +25,7 @@ def main() -> None:
 
     cfg = load_experiment_config(args.config)
     device = resolve_device(cfg.device)
-    model = load_variant(
-        cfg.variant,
-        cfg.model_dir,
-        device=device,
-        dtype=cfg.dtype,
-        attention_backend=cfg.attention_backend,
-        architecture_seed=cfg.architecture_seed,
-        memory_window=cfg.memory_window,
-        prefix_mixin_probability=cfg.prefix_mixin_probability,
-    )
+    model = load_variant_from_config(cfg, device=device)
     if not isinstance(model, MultiPassVariant):
         raise SystemExit("evaluate_pass_depth requires a multipass variant")
     if args.checkpoint:

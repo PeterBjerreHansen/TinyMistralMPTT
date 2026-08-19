@@ -109,14 +109,26 @@ class MemoryAddVariant(MultiPassVariant):
             raise RuntimeError("cached MemoryAdd token did not return KV state")
         return output.last_hidden_state, output.past_key_values
 
-    def _feedback_memory_from_hidden(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    def _feedback_memory_from_hidden(
+        self,
+        hidden_states: torch.Tensor,
+        *,
+        input_ids: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        del input_ids
         if hidden_states.ndim != 3 or hidden_states.shape[1] < 1:
             raise ValueError("hidden_states must be non-empty [B,T,D]")
         return hidden_states[:, -1:, :].detach()
 
     def _append_feedback_memory(
-        self, feedback_memory: torch.Tensor, new_hidden: torch.Tensor
+        self,
+        feedback_memory: torch.Tensor,
+        new_hidden: torch.Tensor,
+        *,
+        token: torch.Tensor | None = None,
+        position: int | None = None,
     ) -> torch.Tensor:
+        del token, position
         if feedback_memory.ndim != 3 or feedback_memory.shape[1] != 1:
             raise ValueError("MemoryAdd feedback memory must be [B,1,D]")
         if new_hidden.ndim != 3 or new_hidden.shape[1] != 1:
