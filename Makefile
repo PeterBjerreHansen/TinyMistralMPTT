@@ -71,12 +71,12 @@ efficiency-mps-precision:
 efficiency-mps-context:
 	uv run python scripts/benchmark_training_efficiency.py \
 		--suite benchmarks/efficiency/suites/context_scaling.yaml --device mps \
-		--output benchmarks/efficiency/results/mps_context.json
+		--output benchmarks/efficiency/results/generated/mps_context.json
 
 efficiency-mps-batch:
 	uv run python scripts/benchmark_training_efficiency.py \
 		--suite benchmarks/efficiency/suites/batch_scaling.yaml --device mps \
-		--output benchmarks/efficiency/results/mps_batch.json
+		--output benchmarks/efficiency/results/generated/mps_batch.json
 
 efficiency-cuda-training:
 	uv run python scripts/benchmark_training_efficiency.py \
@@ -91,12 +91,12 @@ efficiency-cuda-precision:
 efficiency-cuda-context:
 	uv run python scripts/benchmark_training_efficiency.py \
 		--suite benchmarks/efficiency/suites/context_scaling.yaml --device cuda --autocast-dtype bfloat16 \
-		--output benchmarks/efficiency/results/cuda_context.json
+		--output benchmarks/efficiency/results/generated/cuda_context.json
 
 efficiency-cuda-batch:
 	uv run python scripts/benchmark_training_efficiency.py \
 		--suite benchmarks/efficiency/suites/batch_scaling.yaml --device cuda --autocast-dtype bfloat16 \
-		--output benchmarks/efficiency/results/cuda_batch.json
+		--output benchmarks/efficiency/results/generated/cuda_batch.json
 
 # Core-run batching qualification. This keeps grad accumulation at 1 so the
 # hardware microbatch axis is measured without silently changing optimizer batch.

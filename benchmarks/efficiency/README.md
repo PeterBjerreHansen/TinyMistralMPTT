@@ -75,12 +75,12 @@ uv run python scripts/benchmark_training_efficiency.py \
 uv run python scripts/benchmark_training_efficiency.py \
   --suite benchmarks/efficiency/suites/context_scaling.yaml \
   --device mps \
-  --output benchmarks/efficiency/results/mps_context.json
+  --output benchmarks/efficiency/results/generated/mps_context.json
 
 uv run python scripts/benchmark_training_efficiency.py \
   --suite benchmarks/efficiency/suites/batch_scaling.yaml \
   --device mps \
-  --output benchmarks/efficiency/results/mps_batch.json
+  --output benchmarks/efficiency/results/generated/mps_batch.json
 ```
 
 MPS context and batch scaling use FP32 compute by default. If the precision
@@ -103,12 +103,12 @@ uv run python scripts/benchmark_training_efficiency.py \
 uv run python scripts/benchmark_training_efficiency.py \
   --suite benchmarks/efficiency/suites/context_scaling.yaml \
   --device cuda --autocast-dtype bfloat16 \
-  --output benchmarks/efficiency/results/cuda_context.json
+  --output benchmarks/efficiency/results/generated/cuda_context.json
 
 uv run python scripts/benchmark_training_efficiency.py \
   --suite benchmarks/efficiency/suites/batch_scaling.yaml \
   --device cuda --autocast-dtype bfloat16 \
-  --output benchmarks/efficiency/results/cuda_batch.json
+  --output benchmarks/efficiency/results/generated/cuda_batch.json
 ```
 
 Each successful row records unique tokens/s, pass-tokens/s, optimizer steps/s,
