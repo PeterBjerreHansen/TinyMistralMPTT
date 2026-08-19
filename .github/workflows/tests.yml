@@ -11,4 +11,4 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync
-      - run: uv run pytest -q
+      - run: make check
