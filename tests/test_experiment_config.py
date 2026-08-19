@@ -89,16 +89,27 @@ def test_sparse_memory_config_requires_coherent_write_policy():
     cfg = _config(
         variant="memory_add_sparse_tape",
         memory_write_mode="token",
+        memory_write_stride=8,
         memory_token_id=7,
     )
     assert cfg.memory_token_id == 7
 
+    with pytest.raises(ValueError, match="explicitly set memory_write_mode"):
+        _config(variant="sparse_memory_tape")
+    with pytest.raises(ValueError, match="explicitly set memory_write_stride"):
+        _config(variant="sparse_memory_tape", memory_write_mode="periodic")
+
     with pytest.raises(ValueError, match="requires memory_token_id"):
-        _config(variant="sparse_memory_tape", memory_write_mode="token")
+        _config(
+            variant="sparse_memory_tape",
+            memory_write_mode="token",
+            memory_write_stride=8,
+        )
     with pytest.raises(ValueError, match="must not set memory_token_id"):
         _config(
             variant="sparse_memory_tape",
             memory_write_mode="periodic",
+            memory_write_stride=8,
             memory_token_id=7,
         )
 

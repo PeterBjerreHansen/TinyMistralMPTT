@@ -142,7 +142,8 @@ engineering failure.
 ## Sparse-memory architecture knobs
 
 The sparse-memory branch adds three config fields. They are architecture
-settings, not selected hyperparameters:
+settings, not selected hyperparameters, and sparse experiment configs must set
+them explicitly:
 
 ```yaml
 memory_window: 32          # number of addressable committed records
@@ -158,4 +159,6 @@ defined.
 
 For periodic mode, a write at position `t` is committed only after that token's
 computation, so it becomes readable from `t+1`. `memory_window` always counts
-records rather than source-token distance.
+records rather than source-token distance. The nominal tape span is `C * W`
+source positions; it is not a bound on the information contained in each deep
+state.

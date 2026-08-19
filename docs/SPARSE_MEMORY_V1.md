@@ -1,4 +1,4 @@
-# Sparse-memory implementation branch (`sparse-memory-v1`)
+# Sparse-memory implementation branch (`sparse_memory`)
 
 This source snapshot is intended for a separate architecture branch cut from the
 CUDA-batch-ready baseline. It adds two experimental variants without changing

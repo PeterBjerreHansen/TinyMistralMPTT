@@ -101,8 +101,11 @@ architecture capability only; the present Dolmino recipe does not yet insert a
 new `<MEM>` token or define a loss/data protocol for one.
 
 `memory_window` counts **committed memory records**, not source tokens. For a
-periodic cadence C and window W, the approximate represented source span is
-`C * W` tokens. Attention still selects among W candidate memories.
+periodic cadence C and window W, the **nominal tape span** is `C * W` source
+positions: C controls the write rate (`1/C`) and W controls the number of
+addressable candidate records. This is a write-event coverage measure, not a
+claim that the tape contains only information from those positions; each deep
+hidden state may summarize a much longer causal prefix.
 
 The full-sequence implementation compacts committed records and gathers only the
 last W strictly-prior records for each query, retaining O(T*W) reader work. In

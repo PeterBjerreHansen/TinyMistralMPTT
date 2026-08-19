@@ -181,8 +181,12 @@ class ExperimentConfig:
     pass_loss_weights: list[float] | None = None
     pass_loss_weights_by_k: dict[int, list[float]] | None = None
     memory_window: int = 32
-    memory_write_mode: str = "periodic"
-    memory_write_stride: int = 8
+    # Sparse write settings are deliberately unset at the experiment-config
+    # layer. Sparse runs must declare their cadence explicitly instead of
+    # inheriting an experimental C=8 default. Low-level model constructors may
+    # still retain ergonomic defaults for unit tests and interactive use.
+    memory_write_mode: str | None = None
+    memory_write_stride: int | None = None
     memory_token_id: int | None = None
     prefix_mixin_probability: float = 0.0
 
@@ -266,6 +270,14 @@ class ExperimentConfig:
             raise ValueError("memory_window must be positive")
         sparse_variants = {"sparse_memory_tape", "memory_add_sparse_tape"}
         if self.variant in sparse_variants:
+            if self.memory_write_mode is None:
+                raise ValueError(
+                    "sparse-memory configs must explicitly set memory_write_mode"
+                )
+            if self.memory_write_stride is None:
+                raise ValueError(
+                    "sparse-memory configs must explicitly set memory_write_stride"
+                )
             if self.memory_write_mode not in {"periodic", "token"}:
                 raise ValueError("memory_write_mode must be 'periodic' or 'token'")
             if self.memory_write_stride <= 0:
@@ -278,8 +290,8 @@ class ExperimentConfig:
                 raise ValueError("memory_token_id must be non-negative")
         else:
             if (
-                self.memory_write_mode != "periodic"
-                or self.memory_write_stride != 8
+                self.memory_write_mode is not None
+                or self.memory_write_stride is not None
                 or self.memory_token_id is not None
             ):
                 raise ValueError(

@@ -62,7 +62,11 @@ def test_c1_identity_writer_is_exact_dense_memory_tape_bridge():
         for passes in (2, 3):
             expected = dense.compute_passes(ids, passes=passes).final.hidden_states
             actual = sparse.compute_passes(ids, passes=passes).final.hidden_states
-            torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+            # C=1 has the same writer/reader semantics as dense Tape32. The
+            # identity nn.Linear performs a matrix multiply, so allow its
+            # bounded floating-point rounding rather than requiring bitwise
+            # equality across two different attention data paths.
+            torch.testing.assert_close(actual, expected, atol=2e-6, rtol=2e-6)
 
 
 def test_periodic_write_is_invisible_at_own_position():
@@ -146,3 +150,34 @@ def test_cached_token_writes_can_differ_across_batch_examples():
     token = torch.tensor([[7], [3]])
     state = model._append_feedback_memory(state, hidden, token=token, position=0)
     assert state.valid.tolist() == [[True, False, False], [False, False, False]]
+
+
+def test_cached_append_vectorizes_mixed_partial_and_full_rows():
+    model = make_sparse(mode="token", token_id=7, window=3).eval()
+    dim = model.config.hidden_size
+    memories = torch.zeros(3, 3, dim)
+    memories[0, :, :] = torch.tensor([[1.0], [2.0], [3.0]])
+    memories[1, :2, :] = torch.tensor([[4.0], [5.0]])
+    valid = torch.tensor(
+        [[True, True, True], [True, True, False], [False, False, False]]
+    )
+    state = SparseTapeState(memories=memories, valid=valid)
+    hidden = torch.stack(
+        (
+            torch.full((1, dim), 10.0),
+            torch.full((1, dim), 20.0),
+            torch.full((1, dim), 30.0),
+        ),
+        dim=0,
+    )
+    token = torch.tensor([[7], [7], [3]])
+    expected_record = model.writer(hidden).detach()
+
+    updated = model._append_feedback_memory(state, hidden, token=token, position=0)
+
+    torch.testing.assert_close(updated.memories[0, :2], memories[0, 1:], atol=0, rtol=0)
+    torch.testing.assert_close(updated.memories[0, 2], expected_record[0, 0], atol=0, rtol=0)
+    torch.testing.assert_close(updated.memories[1, :2], memories[1, :2], atol=0, rtol=0)
+    torch.testing.assert_close(updated.memories[1, 2], expected_record[1, 0], atol=0, rtol=0)
+    torch.testing.assert_close(updated.memories[2], memories[2], atol=0, rtol=0)
+    assert updated.valid.tolist() == [[True, True, True], [True, True, True], [False, False, False]]

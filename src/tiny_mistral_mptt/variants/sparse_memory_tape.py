@@ -375,16 +375,30 @@ class SparseMemoryTapeVariant(MultiPassVariant):
         new_record = self.writer(new_hidden).detach()
         memories = state.memories.clone()
         valid = state.valid.clone()
-        for batch_index in range(state.batch_size):
-            if not bool(trigger[batch_index]):
-                continue
-            row = memories[batch_index, valid[batch_index], :]
-            row = torch.cat((row, new_record[batch_index]), dim=0)[-self.memory_window :]
-            count = row.shape[0]
-            memories[batch_index].zero_()
-            valid[batch_index].zero_()
-            memories[batch_index, :count, :] = row
-            valid[batch_index, :count] = True
+        counts = valid.sum(dim=1, dtype=torch.long)
+        full_trigger = trigger & counts.eq(self.memory_window)
+
+        # Full rows drop their oldest record. Partial rows keep their existing
+        # left-aligned records and write into the next free slot. Every tensor
+        # operation remains device-side, avoiding a host synchronization for
+        # each batch example during recurrent decoding.
+        shifted_memories = torch.cat(
+            (memories[:, 1:, :], torch.zeros_like(memories[:, :1, :])), dim=1
+        )
+        shifted_valid = torch.cat(
+            (valid[:, 1:], torch.zeros_like(valid[:, :1])), dim=1
+        )
+        memories = torch.where(full_trigger[:, None, None], shifted_memories, memories)
+        valid = torch.where(full_trigger[:, None], shifted_valid, valid)
+
+        write_index = counts.clamp(max=self.memory_window - 1)
+        scatter_index = write_index[:, None, None].expand(-1, 1, new_record.shape[-1])
+        candidate_memories = memories.scatter(1, scatter_index, new_record)
+        candidate_valid = valid.scatter(
+            1, write_index[:, None], torch.ones_like(trigger[:, None])
+        )
+        memories = torch.where(trigger[:, None, None], candidate_memories, memories)
+        valid = torch.where(trigger[:, None], candidate_valid, valid)
         return SparseTapeState(memories.detach(), valid)
 
     def _append_feedback_memory(

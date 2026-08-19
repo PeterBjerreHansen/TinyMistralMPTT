@@ -114,6 +114,13 @@ def _resume_config_view(config: dict) -> dict:
     }
     for key, default in _DEFAULT_EXPERIMENT_FIELDS.items():
         result.setdefault(key, default)
+    # Current non-sparse ExperimentConfig instances leave sparse-only fields
+    # unset so sparse runs cannot inherit an experimental cadence. Normalize
+    # those fields back to their neutral values for resume comparison, while
+    # retaining the historical C=8 defaults for old sparse checkpoint records.
+    if result.get("variant") not in {"sparse_memory_tape", "memory_add_sparse_tape"}:
+        result["memory_write_mode"] = None
+        result["memory_write_stride"] = None
     return result
 
 

@@ -75,9 +75,9 @@ Run engineering efficiency batteries using the targets documented in
 run the provider-agnostic cloud preflight against the exact intended config.
 
 
-## Sparse-memory architecture branch
+## Sparse-memory architecture branch (`sparse_memory`)
 
-The `sparse-memory-v1` development snapshot adds `sparse_memory_tape` and
+The `sparse_memory` development branch adds `sparse_memory_tape` and
 `memory_add_sparse_tape`. See `docs/SPARSE_MEMORY_V1.md` and
 `docs/ARCHITECTURES.md`. These models are experimental and are not part of the current dense Add/Tape
 qualification or any locked core campaign.
