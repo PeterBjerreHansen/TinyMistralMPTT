@@ -1,4 +1,5 @@
 # Smoke results
 
-Generated smoke-run checkpoints and metrics belong here. These outputs are
-local validation artifacts and remain ignored by Git.
+Generated smoke-run checkpoints and metrics are written under `generated/` and
+ignored by Git. Smoke outputs are validation artifacts rather than retained
+scientific results.

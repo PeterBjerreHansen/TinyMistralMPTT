@@ -1,0 +1,9 @@
+name: wiring
+status: complete
+question: >
+  Can the added MemoryAdd and MemoryTape32 pathways be trained from an exact
+  vanilla starting point before joint Phase-B optimization?
+arms:
+  - {id: memory_add, config: memory_add.yaml}
+  - {id: memory_tape32, config: memory_tape32.yaml}
+comparisons: []

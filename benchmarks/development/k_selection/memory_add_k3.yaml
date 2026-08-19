@@ -2,9 +2,10 @@ variant: memory_add
 phase: B
 model_dir: checkpoints/TinyMistral-248M-v3
 data_dir: data/dolmino/local_2048
-output_dir: benchmarks/development/k_selection/results/memory_add_k3
+output_dir: benchmarks/development/k_selection/results/generated/memory_add_k3
 device: mps
 dtype: float32
+autocast_dtype: null
 attention_backend: auto
 seed: 1337
 architecture_seed: 4242
@@ -27,4 +28,4 @@ eval_batches: 16
 eval_passes: 8
 checkpoint_every_tokens: 262144
 resume_from: null
-init_from: benchmarks/development/wiring/results/memory_add/latest.pt
+init_from: benchmarks/development/wiring/results/generated/memory_add/latest.pt

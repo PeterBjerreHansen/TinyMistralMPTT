@@ -2,12 +2,14 @@ variant: memory_tape32
 phase: B
 model_dir: checkpoints/TinyMistral-248M-v3
 data_dir: data/dolmino/local_2048
-output_dir: benchmarks/development/k_selection/results/memory_tape32_k3
+output_dir: benchmarks/development/k_selection/results/generated/memory_tape32_k3
 device: mps
 dtype: float32
+autocast_dtype: null
 attention_backend: auto
 seed: 1337
 architecture_seed: 4242
+memory_window: 32
 batch_size: 1
 grad_accum_steps: 1
 max_unique_tokens: 262144
@@ -27,4 +29,4 @@ eval_batches: 16
 eval_passes: 8
 checkpoint_every_tokens: 262144
 resume_from: null
-init_from: benchmarks/development/wiring/results/memory_tape32/latest.pt
+init_from: benchmarks/development/wiring/results/generated/memory_tape32/latest.pt

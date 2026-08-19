@@ -1,8 +1,9 @@
 # Scripts
 
 Scripts are thin command-line entry points. Data recipes belong beside their
-artifacts under `data/`; experiment settings belong in `benchmarks/`; generated
-outputs belong in the relevant experiment's `results/` directory.
+artifacts under `data/`; reusable evaluation suites live under `evaluation/`;
+experiment settings live with their owner under `benchmarks/`. Raw training
+outputs belong under the owning study/control's `results/generated/` directory.
 
 ## Setup and validation
 
@@ -14,6 +15,7 @@ compare_to_hf_layers.py
 compare_to_hf_inputs_embeds.py
 prepare_data.py
 verify_data.py
+verify_study.py
 smoke_mps.py
 ```
 
@@ -29,5 +31,7 @@ evaluate_recurrent_inference.py
 generate.py
 ```
 
-The names describe the operation directly; no script name encodes a specific
-historical experiment.
+Pass-depth, memory-intervention, and recurrent-inference programs are reusable
+checkpoint diagnostics. Their existence does not imply a dedicated benchmark
+study. Script names describe operations directly and never encode a historical
+campaign.

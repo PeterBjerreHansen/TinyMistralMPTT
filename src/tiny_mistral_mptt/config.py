@@ -141,7 +141,7 @@ class ExperimentConfig:
     variant: str = "vanilla"
     model_dir: str = "checkpoints/TinyMistral-248M-v3"
     data_dir: str = "data/dolmino/local_2048"
-    output_dir: str = "benchmarks/controls/smoke/results/vanilla"
+    output_dir: str = "benchmarks/controls/smoke/results/generated/vanilla"
     device: str = "auto"
     dtype: str = "float32"
     autocast_dtype: str | None = None

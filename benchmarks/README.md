@@ -4,11 +4,18 @@ Benchmark work is organized by scientific role:
 
 - `historical/`: retained evidence from superseded campaigns.
 - `controls/`: reusable vanilla substrate controls and smoke checks.
-- `development/`: structured protocol-development studies such as context,
-  learning-rate, pass-depth, and K selection.
-- `ad_hoc/`: one-off diagnostics and exploratory tests.
-- `core/`: future decisive runs that establish the project's main claims.
-- `efficiency/`: engineering measurements of throughput, memory, precision,
-  and feasible batch/context sizes.
+- `development/`: structured studies that inform a future protocol.
+- `ad_hoc/`: one-off exploratory work and disposable diagnostics.
+- `core/`: larger, predeclared studies intended to establish central claims.
+- `efficiency/`: engineering measurements of throughput, memory, precision, and
+  feasible batch/context sizes.
 
-Each active study keeps its settings and `results/` directory together.
+Configuration is colocated with its owner. Development and core studies should
+use `STUDY.yaml` to state the scientific question, runnable arms, and declared
+comparison differences without duplicating execution parameters from those
+configs. The schema and conventions are documented in `docs/STUDIES.md`.
+
+For training studies, compact summaries and comparison tables are tracked under
+`results/`; generated run artifacts live under `results/generated/` and remain
+ignored. Efficiency JSON files are small retained benchmark results and may be
+tracked directly under `benchmarks/efficiency/results/`.

@@ -2,8 +2,9 @@ from pathlib import Path
 
 import yaml
 
-from tiny_mistral_mptt.config import load_experiment_config
+from tiny_mistral_mptt.config import ExperimentConfig, load_experiment_config
 from tiny_mistral_mptt.data.config import load_data_config
+from tiny_mistral_mptt.studies import discover_studies, verify_study
 
 ROOT = Path(__file__).resolve().parents[1]
 HISTORICAL_RESULTS = (
@@ -11,64 +12,32 @@ HISTORICAL_RESULTS = (
 )
 
 
-def _active_config_paths() -> list[Path]:
-    paths = list((ROOT / "benchmarks" / "controls" / "substrate").glob("*.yaml"))
-    paths.extend((ROOT / "benchmarks" / "controls" / "smoke").glob("*.yaml"))
-    paths.extend(
+def _control_configs() -> list[Path]:
+    return sorted((ROOT / "benchmarks" / "controls").glob("**/*.yaml"))
+
+
+def _development_configs() -> list[Path]:
+    return sorted(
         path
         for path in (ROOT / "benchmarks" / "development").glob("**/*.yaml")
-        if path.name not in {"PLAN.yaml", "data.yaml"}
+        if path.name != "STUDY.yaml"
     )
-    return sorted(paths)
 
 
-def test_locked_layout_is_explicit():
-    assert not (ROOT / "configs").exists()
-    assert not (ROOT / "experiments").exists()
-    assert (ROOT / "benchmarks" / "controls").is_dir()
-    assert (ROOT / "benchmarks" / "controls" / "smoke").is_dir()
-    assert (ROOT / "benchmarks" / "controls" / "substrate").is_dir()
-    assert (ROOT / "benchmarks" / "controls" / "smoke" / "results").is_dir()
-    assert (ROOT / "benchmarks" / "controls" / "substrate" / "results").is_dir()
-    assert (ROOT / "benchmarks" / "ad_hoc").is_dir()
-    assert (ROOT / "benchmarks" / "development").is_dir()
-    assert (ROOT / "benchmarks" / "core").is_dir()
-    assert (ROOT / "benchmarks" / "historical").is_dir()
-
-    assert (HISTORICAL_RESULTS / "k_sweep.md").exists()
+def test_historical_results_remain_lightweight_evidence():
+    assert (HISTORICAL_RESULTS / "k_sweep.md").is_file()
+    assert (HISTORICAL_RESULTS.parent / "README.md").is_file()
     assert not (HISTORICAL_RESULTS.parent / "PROTOCOL.yaml").exists()
     assert not (HISTORICAL_RESULTS.parent / "configs").exists()
-    assert not (ROOT / "runs" / "stage2_cleanroom_v1").exists()
 
 
-def test_historical_results_are_retained_without_runnable_surface():
-    expected = {
-        "historical_comparison.md",
-        "k_sweep.md",
-        "learning_rate.md",
-        "mixtures.md",
-        "pass_depth_and_inference.md",
-    }
-    assert {path.name for path in HISTORICAL_RESULTS.glob("*.md")} == expected
-
-
-def test_default_experiment_config_uses_active_2048_context():
-    from tiny_mistral_mptt.config import ExperimentConfig
-
+def test_default_experiment_config_uses_active_2048_context_and_local_generated_output():
     cfg = ExperimentConfig()
     assert cfg.data_dir == "data/dolmino/local_2048"
-    assert cfg.output_dir == "benchmarks/controls/smoke/results/vanilla"
+    assert cfg.output_dir == "benchmarks/controls/smoke/results/generated/vanilla"
 
 
-def test_local_2048_data_recipe_parses():
-    cfg = load_data_config(ROOT / "data" / "dolmino" / "local_2048" / "config.yaml")
-    assert cfg.output_dir == "data/dolmino/local_2048"
-    assert cfg.sequence_length == 2048
-    assert cfg.train_tokens == 1_048_576
-    assert cfg.validation_tokens == 131_072
-
-
-def test_data_recipes_live_beside_their_artifacts():
+def test_data_recipes_live_beside_materialized_artifacts():
     for name in ("local_2048", "gpu_2048"):
         path = ROOT / "data" / "dolmino" / name / "config.yaml"
         assert path.exists()
@@ -77,39 +46,42 @@ def test_data_recipes_live_beside_their_artifacts():
         assert cfg.sequence_length == 2048
 
 
-def test_lm_evaluation_suites_live_with_the_data_assets():
-    suite_dir = ROOT / "data" / "lm_evaluation"
-    assert (suite_dir / "README.md").exists()
-    assert (suite_dir / "results" / "README.md").exists()
+def test_evaluation_suites_are_reusable_assets_not_data_recipes():
+    suite_dir = ROOT / "evaluation" / "suites"
     for name in ("quick.yaml", "full.yaml"):
         suite = yaml.safe_load((suite_dir / name).read_text(encoding="utf-8"))
         assert suite["tasks"]
         assert all("name" in task and "num_fewshot" in task for task in suite["tasks"])
+    assert not (ROOT / "data" / "lm_evaluation").exists()
 
 
-def test_all_active_benchmark_configs_parse():
-    paths = _active_config_paths()
-    assert paths
-    for path in paths:
-        load_experiment_config(path)
+def test_control_configs_parse_and_write_to_local_generated_results():
+    configs = _control_configs()
+    assert configs
+    for path in configs:
+        cfg = load_experiment_config(path)
+        control_dir = path.parent
+        expected_prefix = (control_dir / "results" / "generated").relative_to(ROOT)
+        output = Path(cfg.output_dir)
+        assert output.is_relative_to(expected_prefix)
 
 
-def test_config_namespaces_are_current():
-    roots = [
-        ROOT / "benchmarks" / "controls",
-        ROOT / "benchmarks" / "development",
-        ROOT / "benchmarks" / "ad_hoc",
-    ]
-    text = "\n".join(
-        path.read_text(encoding="utf-8")
-        for root in roots
-        for path in root.glob("**/*.yaml")
-    )
-    assert "runs/mac-" not in text
-    assert "runs/cleanroom-v1" not in text
-    assert "runs/" not in text
-    assert "experiments/" not in text
-    assert "configs/" not in text
+def test_development_studies_verify_semantically():
+    manifests = discover_studies(ROOT)
+    assert manifests
+    for manifest in manifests:
+        verify_study(manifest)
+
+
+def test_active_configs_do_not_depend_on_historical_or_legacy_namespaces():
+    configs = _control_configs() + _development_configs()
+    assert configs
+    for path in configs:
+        text = path.read_text(encoding="utf-8")
+        assert "benchmarks/historical/" not in text
+        assert "experiments/" not in text
+        assert "configs/" not in text
+        assert "runs/" not in text
 
 
 def test_training_efficiency_defaults_to_2048_cases():
@@ -121,15 +93,25 @@ def test_training_efficiency_defaults_to_2048_cases():
     assert {case["sequence_length"] for case in suite["cases"]} == {2048}
 
 
-def test_root_readme_keeps_stage2_protocol_pending():
+def test_root_readme_keeps_stage2_protocol_pending_and_explains_config_locality():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "The Stage 2 protocol remains open" in readme
-    assert "configs/" not in readme
-    assert "backbone learning rate `3e-7`" not in readme
+    assert "There is intentionally no central `configs/` directory" in readme
+    assert "results/generated/" in readme
 
 
-def test_stage2_docs_do_not_claim_an_old_lock():
-    lr_report = (HISTORICAL_RESULTS / "learning_rate.md").read_text(encoding="utf-8")
-    validation = (ROOT / "docs" / "VALIDATION.md").read_text(encoding="utf-8")
-    assert "locked clean-room protocol remains unchanged" not in lr_report
-    assert "historical clean-room result records" in validation
+def test_deleted_diagnostic_studies_are_not_referenced_by_current_docs():
+    current = [ROOT / "README.md", ROOT / "docs", ROOT / "benchmarks" / "development"]
+    text_parts = []
+    for path in current:
+        if path.is_file():
+            text_parts.append(path.read_text(encoding="utf-8"))
+        else:
+            text_parts.extend(
+                file.read_text(encoding="utf-8")
+                for file in path.rglob("*")
+                if file.is_file() and file.suffix in {".md", ".yaml"}
+            )
+    text = "\n".join(text_parts)
+    assert "pass_stability/" not in text
+    assert "exact_vs_recurrent_inference/" not in text

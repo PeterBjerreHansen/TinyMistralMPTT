@@ -97,7 +97,7 @@ uv run python scripts/evaluate_recurrent_inference.py \
   --prompt-tokens 256 \
   --continuation-tokens 256 \
   --horizons 1 2 4 8 16 32 64 128 256 \
-  --output benchmarks/development/exact_vs_recurrent_inference/results/recurrent_inference.json
+  --output /tmp/recurrent_inference.json
 ```
 
 `--prefill-passes` accepts one or more positive K values. It is deliberately not

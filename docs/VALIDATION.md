@@ -1,7 +1,9 @@
 # Validation gates
 
 This file records durable correctness gates for the codebase. Experimental
-results and protocol decisions live under `benchmarks/`.
+results and protocol decisions live under `benchmarks/`; reusable diagnostics
+remain executable from `scripts/` rather than becoming benchmark studies by
+default.
 
 ## Vanilla substrate
 
@@ -44,33 +46,39 @@ For MemoryAdd and MemoryTape32:
 - absolute cache positions remain correct beyond the self-attention sliding
   window.
 
-## Benchmark-layout gates
+Pass-depth stability, memory interventions, and exact-vs-recurrent drift are
+validation measurements available for any checkpoint. They should become a
+retained benchmark result only when they support an actual scientific decision.
 
-The repository structure is also part of reproducibility:
+## Benchmark and study gates
 
-- historical clean-room result records are retained under
-  `benchmarks/historical/stage2_cleanroom_v1/results/`, without runnable configs or
-  generated checkpoints;
-- reusable substrate and smoke controls live under `benchmarks/controls/`;
-- development configs and reports live together under `benchmarks/development/`;
-- ad-hoc diagnostics live under `benchmarks/ad_hoc/`;
-- core configs and reports live together under `benchmarks/core/` after the
-  protocol is explicitly locked;
-- generated outputs live in the corresponding experiment `results/` directory;
-- active benchmark and data recipes point only to the current checkpoint and
-  data namespaces;
-- protocol and result records use the same descriptive names as their configs.
+Repository organization follows semantic rather than filename-only invariants:
 
-These invariants are checked by `tests/test_experiment_layout.py`.
+- runnable configs live with the control or study that owns them;
+- development/core studies use `STUDY.yaml` instead of a central config tree;
+- the manifest names the scientific question and comparison axes but does not
+  duplicate execution settings from runnable configs;
+- every runnable config in a study is declared by the manifest;
+- a study arm writes raw run artifacts only beneath its local
+  `results/generated/<arm>/` directory;
+- compared arms must match on every config field except the arm-local output
+  path, declared `experimental_axes`, and any explicitly documented
+  `allowed_differences`;
+- historical reports are lightweight read-only evidence rather than an active
+  runnable surface;
+- current configs may not depend on historical namespaces.
+
+`tests/test_experiment_layout.py`, `tests/test_studies.py`, and
+`scripts/verify_study.py` enforce these conventions.
 
 ## Standard local gate
 
 ```bash
-uv run pytest -q
-uv run python -m compileall -q src scripts tests benchmarks
+make check
 ```
 
-On Apple hardware also run:
+This runs pytest, byte-compilation, study verification, and `git diff --check`
+when Git metadata is available. On Apple hardware also run:
 
 ```bash
 uv run python scripts/smoke_mps.py
@@ -81,3 +89,4 @@ uv run python scripts/smoke_mps.py
 No CUDA efficiency claim is assumed by the repository. Before a serious GPU
 campaign, benchmark the intended models and context lengths and record peak
 memory, throughput, parameter count, effective pass count, and inference mode.
+Then run `scripts/cloud_preflight.py` against the exact intended paid-run config.

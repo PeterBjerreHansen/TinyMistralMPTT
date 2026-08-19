@@ -22,7 +22,7 @@ def main() -> None:
         description="Run a checked-in lm-evaluation-harness suite."
     )
     parser.add_argument("--config", required=True)
-    parser.add_argument("--suite", default="data/lm_evaluation/quick.yaml")
+    parser.add_argument("--suite", default="evaluation/suites/quick.yaml")
     parser.add_argument("--checkpoint", default=None)
     parser.add_argument("--limit", type=float, default=None)
     parser.add_argument("--output", default=None)
@@ -70,7 +70,9 @@ def main() -> None:
     output = {"suite": str(args.suite), "results": collected}
     text = json.dumps(output, indent=2, sort_keys=True, default=str) + "\n"
     if args.output:
-        Path(args.output).write_text(text, encoding="utf-8")
+        path = Path(args.output)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
     else:
         print(text)
 

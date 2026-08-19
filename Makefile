@@ -1,4 +1,4 @@
-.PHONY: test compile check download verify hf-check hf-layers hf-embeds \
+.PHONY: test compile study-gates check download verify hf-check hf-layers hf-embeds \
   mps-smoke prepare-data verify-data evaluate-nll evaluate-quick substrate-gates \
   efficiency-mps efficiency-cuda efficiency-mps-training efficiency-mps-precision \
   efficiency-mps-context efficiency-mps-batch efficiency-cuda-training \
@@ -8,10 +8,14 @@ test:
 	uv run pytest -q
 
 compile:
-	uv run python -m compileall -q src scripts tests benchmarks
+	uv run python -m compileall -q src scripts tests
 
-check: test compile
-	git diff --check
+study-gates:
+	uv run python scripts/verify_study.py
+
+check: test compile study-gates
+	@if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then git diff --check; \
+	else echo "SKIP: git diff --check (no Git metadata in this source snapshot)"; fi
 
 download:
 	uv run python scripts/download_model.py
@@ -44,11 +48,11 @@ evaluate-nll:
 evaluate-quick:
 	uv run python scripts/evaluate_lm_harness.py \
 		--config benchmarks/controls/substrate/mac.yaml \
-		--suite data/lm_evaluation/quick.yaml --limit 100
+		--suite evaluation/suites/quick.yaml --limit 100
 
 substrate-gates: check verify hf-check hf-layers hf-embeds mps-smoke
 
-# Engineering-only efficiency characterization. Results live beside the suites.
+# Engineering-only efficiency characterization. These compact JSON results are retained.
 efficiency-mps: efficiency-mps-training efficiency-mps-precision efficiency-mps-context efficiency-mps-batch
 
 efficiency-cuda: efficiency-cuda-training efficiency-cuda-precision efficiency-cuda-context efficiency-cuda-batch

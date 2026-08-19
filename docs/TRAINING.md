@@ -89,8 +89,8 @@ scheduler, RNG state, counters, phase, and compatible experiment config. Use it
 only to continue the same run.
 
 A development checkpoint should never become a main-run parent merely because
-it is newest. Main Stage 2 ancestry is defined by the locked protocol and the
-Stage 1 starting-point manifest.
+it is newest. Main Stage 2 ancestry is defined by the locked core study and the
+selected Stage 1 checkpoint provenance recorded by the run.
 
 ## Token accounting
 

@@ -1,7 +1,0 @@
-name: learning_rate
-status: development
-data_artifact: data/dolmino/local_2048
-unique_tokens: 262144
-added_learning_rate: 1.0e-6
-backbone_learning_rates: [0.0, 3.0e-8, 1.0e-7, 3.0e-7, 1.0e-6, 3.0e-6, 1.0e-5]
-variants: [memory_add, memory_tape32, vanilla]

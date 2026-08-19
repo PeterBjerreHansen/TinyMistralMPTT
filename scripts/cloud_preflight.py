@@ -96,10 +96,22 @@ def main() -> None:
         except Exception as exc:  # preflight should aggregate failures
             failures.append(f"data artifact verification failed: {exc}")
 
-    if cfg.init_from and not _repo_path(root, cfg.init_from).exists():
-        failures.append(f"init_from checkpoint does not exist: {cfg.init_from}")
-    if cfg.resume_from and not _repo_path(root, cfg.resume_from).exists():
-        failures.append(f"resume_from checkpoint does not exist: {cfg.resume_from}")
+    checkpoint_hashes: dict[str, str | None] = {
+        "init_from_sha256": None,
+        "resume_from_sha256": None,
+    }
+    if cfg.init_from:
+        init_path = _repo_path(root, cfg.init_from)
+        if not init_path.exists():
+            failures.append(f"init_from checkpoint does not exist: {cfg.init_from}")
+        else:
+            checkpoint_hashes["init_from_sha256"] = file_sha256(init_path)
+    if cfg.resume_from:
+        resume_path = _repo_path(root, cfg.resume_from)
+        if not resume_path.exists():
+            failures.append(f"resume_from checkpoint does not exist: {cfg.resume_from}")
+        else:
+            checkpoint_hashes["resume_from_sha256"] = file_sha256(resume_path)
 
     output_dir = _repo_path(root, cfg.output_dir)
     if output_dir.exists() and not args.allow_existing_output:
@@ -131,6 +143,7 @@ def main() -> None:
         "model_verification": model_verification,
         "hardware": hardware,
         "data_manifest_sha256": manifest_sha256,
+        "checkpoint_hashes": checkpoint_hashes,
         "failures": failures,
     }
     print(json.dumps(report, indent=2, sort_keys=True))

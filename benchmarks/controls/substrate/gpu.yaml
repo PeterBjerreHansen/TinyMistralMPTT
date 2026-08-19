@@ -1,21 +1,33 @@
 variant: vanilla
+phase: B
 model_dir: checkpoints/TinyMistral-248M-v3
 data_dir: data/dolmino/gpu_2048
-output_dir: benchmarks/controls/substrate/results/gpu
+output_dir: benchmarks/controls/substrate/results/generated/gpu
 device: cuda
 dtype: float32
 autocast_dtype: bfloat16
 attention_backend: auto
 seed: 1337
+architecture_seed: 4242
 batch_size: 4
 grad_accum_steps: 4
 max_unique_tokens: 99999744
 learning_rate: 1.0e-6
 min_lr_ratio: 0.1
 warmup_tokens: 1000000
+lr_schedule:
+  type: cosine
+  warmup_tokens: 1000000
+  min_multiplier: 0.1
 weight_decay: 0.01
 grad_clip: 1.0
+pass_schedule:
+  - probabilities:
+      1: 1.0
+pass_loss_weights: null
 eval_every_tokens: 5000000
+eval_passes: 1
 eval_batches: 128
 checkpoint_every_tokens: 10000000
 resume_from: null
+init_from: null

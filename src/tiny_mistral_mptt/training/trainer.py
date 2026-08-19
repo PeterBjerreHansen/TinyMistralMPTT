@@ -93,7 +93,10 @@ class Trainer:
 
         initialization_provenance = None
         if config.init_from:
-            initialization_provenance = load_model_weights(config.init_from, model=self.model)
+            initialization_provenance = load_model_weights(
+                config.init_from, model=self.model
+            )
+            initialization_provenance["source_sha256"] = file_sha256(config.init_from)
 
         trainable = configure_phase(model, config.phase)
         if trainable == 0:

@@ -6,6 +6,7 @@ import torch
 from conftest import micro_config
 from tiny_mistral.modeling import MistralForCausalLM
 from tiny_mistral_mptt.config import ExperimentConfig
+from tiny_mistral_mptt.data.manifest import file_sha256
 from tiny_mistral_mptt.data.packed_dataset import PackedTokenDataset
 from tiny_mistral_mptt.data.prepare import PreparationRequest, materialize_from_document_iterators
 from tiny_mistral_mptt.data.recipes import DOLMINO_50B_SOURCES
@@ -162,6 +163,8 @@ def test_init_from_loads_model_only_into_fresh_phase_b_run(tmp_path):
     )
     assert trainer.state.unique_tokens_seen == 0
     assert trainer.state.optimizer_steps == 0
+    run_info = json.loads((tmp_path / "b" / "run.json").read_text(encoding="utf-8"))
+    assert run_info["initialization_provenance"]["source_sha256"] == file_sha256(checkpoint)
     for name, tensor in fresh.state_dict().items():
         torch.testing.assert_close(tensor, expected[name], atol=0, rtol=0)
 

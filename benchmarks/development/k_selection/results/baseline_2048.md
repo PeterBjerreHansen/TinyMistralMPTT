@@ -13,6 +13,7 @@ The completed short Phase-B endpoints were:
 | MemoryTape32 K=2 | 2.400027 | 2.316835 | — | 2.320331 |
 | MemoryTape32 K=3 | 2.412874 | 2.317872 | 2.319745 | 2.319152 |
 
-The wiring and recurrent-inference diagnostics are retained with the local
-experiment record when those runs are repeated or extended. No core campaign
-is locked by this qualification alone.
+Pass-depth, memory-intervention, and recurrent-inference diagnostics can be
+regenerated from retained checkpoints with the reusable evaluation scripts. No
+dedicated development study is required for those diagnostics, and no core
+campaign is locked by this qualification alone.

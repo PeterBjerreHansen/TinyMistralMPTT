@@ -76,5 +76,5 @@ A case that exceeds memory is recorded as `status: oom` and the suite continues.
 An unavailable BF16 mode is recorded as `status: unsupported` rather than
 invalidating the whole precision suite.
 
-Generated results live under `benchmarks/efficiency/results/`. See
+Compact retained results live under `benchmarks/efficiency/results/`. See
 `docs/PRECISION.md` for the training precision contract.

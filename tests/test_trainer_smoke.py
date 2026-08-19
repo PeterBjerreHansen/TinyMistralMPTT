@@ -70,8 +70,12 @@ def test_end_to_end_vanilla_trainer_and_resume(tmp_path):
     checkpoint = tmp_path / "run1" / "latest.pt"
     assert checkpoint.exists()
     source = json.loads((tmp_path / "run1" / "run.json").read_text())["source"]
-    assert len(source["git_commit"]) == 40
-    assert isinstance(source["git_dirty"], bool)
+    if source["git_commit"] is None:
+        # Source archives intentionally have no .git metadata.
+        assert source["git_dirty"] is None
+    else:
+        assert len(source["git_commit"]) == 40
+        assert isinstance(source["git_dirty"], bool)
 
     second_cfg = ExperimentConfig.from_dict({**first_cfg.to_dict(),
         "output_dir": str(tmp_path / "run2"),

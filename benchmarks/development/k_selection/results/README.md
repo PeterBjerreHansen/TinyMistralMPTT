@@ -1,8 +1,7 @@
 # K-selection results
 
-K-schedule metrics, realized K histograms, compute accounting, and comparison
-tables belong here.
+`baseline_2048.md` is the retained comparison record. Raw arm checkpoints,
+metrics, and run manifests are written beneath `generated/` and ignored by Git.
 
-The short 2048-token qualification table is retained here as supporting
-evidence in `baseline_2048.md`; it is not a separate development
-study.
+Pass-depth, memory-intervention, and exact-vs-recurrent diagnostics are reusable
+validation tools; they do not require dedicated benchmark directories.

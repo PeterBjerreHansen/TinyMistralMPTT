@@ -2,9 +2,10 @@ variant: memory_add
 phase: A
 model_dir: checkpoints/TinyMistral-248M-v3
 data_dir: data/dolmino/local_2048
-output_dir: benchmarks/development/wiring/results/memory_add
+output_dir: benchmarks/development/wiring/results/generated/memory_add
 device: mps
 dtype: float32
+autocast_dtype: null
 attention_backend: auto
 seed: 1337
 architecture_seed: 4242
