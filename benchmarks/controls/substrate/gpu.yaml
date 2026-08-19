@@ -29,6 +29,15 @@ pass_loss_weights: null
 eval_every_tokens: 5000000
 eval_passes: 1
 eval_batches: 128
-checkpoint_every_tokens: 10000000
+# Spot-safe recovery: whichever condition fires first triggers a durable save.
+# Retention is bounded to the two newest complete training states.
+checkpoint_every_tokens: 500000
+checkpoint_every_seconds: 600
+checkpoint_keep_last: 2
+snapshot_at_tokens:
+  - 25000000
+  - 50000000
+  - 75000000
+  - 100007936
 resume_from: null
 init_from: null

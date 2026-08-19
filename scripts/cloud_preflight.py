@@ -4,33 +4,16 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-import subprocess
+import shutil
 
 import torch
 
 from tiny_mistral.device import resolve_device
 from tiny_mistral_mptt.config import load_experiment_config
 from tiny_mistral_mptt.data.manifest import file_sha256, verify_artifact
+from tiny_mistral_mptt.training.checkpoint import candidate_checkpoint_paths, inspect_checkpoint
+from tiny_mistral_mptt.training.provenance import hardware_provenance, source_provenance
 from tiny_mistral.loading import verify_target_checkpoint
-
-
-def _git_state(root: Path) -> tuple[str | None, bool | None]:
-    try:
-        commit = subprocess.check_output(
-            ["git", "-C", str(root), "rev-parse", "HEAD"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-        dirty = bool(
-            subprocess.check_output(
-                ["git", "-C", str(root), "status", "--porcelain"],
-                text=True,
-                stderr=subprocess.DEVNULL,
-            ).strip()
-        )
-        return commit, dirty
-    except (OSError, subprocess.CalledProcessError):
-        return None, None
 
 
 def _repo_path(root: Path, value: str | Path) -> Path:
@@ -38,30 +21,55 @@ def _repo_path(root: Path, value: str | Path) -> Path:
     return path if path.is_absolute() else root / path
 
 
+def _inside(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _occupied_run(output_dir: Path) -> bool:
+    return any(
+        path.exists()
+        for path in (
+            output_dir / "run.json",
+            output_dir / "metrics.jsonl",
+            output_dir / "segments.jsonl",
+            output_dir / "checkpoints",
+        )
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Provider-agnostic preflight for a CUDA training run.")
     parser.add_argument("--config", required=True)
     parser.add_argument("--allow-dirty", action="store_true")
-    parser.add_argument("--allow-existing-output", action="store_true")
+    parser.add_argument("--allow-source-mismatch", action="store_true")
+    parser.add_argument("--mode", choices=("new", "resume", "auto"), default="new")
+    parser.add_argument(
+        "--persistent-root",
+        default=None,
+        help="require output_dir to live underneath this persistent filesystem root",
+    )
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
     config_path = _repo_path(root, args.config)
     cfg = load_experiment_config(config_path)
     failures: list[str] = []
+    warnings: list[str] = []
 
     try:
         device = resolve_device(cfg.device)
     except RuntimeError as exc:
-        # Keep preflight diagnostic: a local Mac should still receive the
-        # checkpoint, data, and provenance checks instead of a traceback.
         device = None
         failures.append(str(exc))
 
-    commit, dirty = _git_state(root)
-    if commit is None:
-        failures.append("could not resolve git commit")
-    if dirty and not args.allow_dirty:
+    source = source_provenance(root)
+    if source["git_commit"] is None:
+        warnings.append("git commit unavailable; source_code_sha256 will identify execution code")
+    if source["git_dirty"] and not args.allow_dirty:
         failures.append("git worktree is dirty")
     if device is None or device.type != "cuda":
         failures.append(f"cloud preflight requires CUDA; resolved {device}")
@@ -82,7 +90,7 @@ def main() -> None:
             model_verification = verify_target_checkpoint(model_dir)
             if not model_verification["ok"]:
                 failures.append("model checkpoint does not match the pinned TinyMistral target")
-        except Exception as exc:  # preflight should aggregate failures
+        except Exception as exc:
             failures.append(f"model checkpoint verification failed: {exc}")
 
     data_dir = _repo_path(root, cfg.data_dir)
@@ -94,7 +102,7 @@ def main() -> None:
         try:
             data_manifest = verify_artifact(data_dir)
             manifest_sha256 = file_sha256(data_dir / "manifest.json")
-        except Exception as exc:  # preflight should aggregate failures
+        except Exception as exc:
             failures.append(f"data artifact verification failed: {exc}")
 
     checkpoint_hashes: dict[str, str | None] = {
@@ -115,27 +123,101 @@ def main() -> None:
             checkpoint_hashes["resume_from_sha256"] = file_sha256(resume_path)
 
     output_dir = _repo_path(root, cfg.output_dir)
-    if output_dir.exists() and not args.allow_existing_output:
-        occupied = any((output_dir / name).exists() for name in ("run.json", "metrics.jsonl", "latest.pt"))
+    occupied = _occupied_run(output_dir)
+    run_json_exists = (output_dir / "run.json").exists()
+    effective_mode = args.mode
+    if args.mode == "auto":
+        if not occupied:
+            effective_mode = "new"
+        elif run_json_exists:
+            effective_mode = "resume"
+        else:
+            failures.append("auto mode found run artifacts without run.json; refusing ambiguous recovery")
+            effective_mode = "invalid"
+
+    selected_checkpoint = None
+    selected_checkpoint_metadata = None
+    if effective_mode == "new":
         if occupied:
-            failures.append(f"output_dir already contains run artifacts: {output_dir}")
+            failures.append(f"new mode refuses existing run artifacts: {output_dir}")
+    elif effective_mode == "resume":
+        if not run_json_exists:
+            failures.append(f"resume mode requires run.json: {output_dir}")
+        candidates = candidate_checkpoint_paths(output_dir)
+        checkpoint_errors: list[str] = []
+        for path in candidates:
+            try:
+                metadata = inspect_checkpoint(path)
+            except Exception as exc:
+                checkpoint_errors.append(f"{path.name}: {type(exc).__name__}: {exc}")
+                continue
+            selected_checkpoint = path
+            selected_checkpoint_metadata = metadata
+            break
+        if selected_checkpoint is None:
+            failures.append(
+                "resume mode found no readable checkpoint generation"
+                + (f" ({'; '.join(checkpoint_errors)})" if checkpoint_errors else "")
+            )
+        else:
+            if manifest_sha256 is not None and selected_checkpoint_metadata["data_manifest_sha256"] != manifest_sha256:
+                failures.append("selected checkpoint data manifest does not match current data artifact")
+            recorded_source = selected_checkpoint_metadata.get("source_provenance") or {}
+            if selected_checkpoint_metadata.get("format_version", 0) >= 3 and not args.allow_source_mismatch:
+                recorded_code = recorded_source.get("source_code_sha256")
+                current_code = source.get("source_code_sha256")
+                code_mismatch = (
+                    recorded_code is not None
+                    and current_code is not None
+                    and recorded_code != current_code
+                )
+                uv_mismatch = recorded_source.get("uv_lock_sha256") != source.get("uv_lock_sha256")
+                legacy_git_mismatch = (
+                    recorded_code is None
+                    and recorded_source.get("git_commit") != source.get("git_commit")
+                )
+                if code_mismatch or uv_mismatch or legacy_git_mismatch:
+                    failures.append("selected checkpoint execution code/environment does not match current checkout")
+                elif (
+                    recorded_source.get("git_commit")
+                    and source.get("git_commit")
+                    and recorded_source.get("git_commit") != source.get("git_commit")
+                ):
+                    warnings.append("Git commit differs but execution-code and uv.lock hashes are identical")
 
-    hardware = {
-        "device": str(device) if device is not None else f"unresolved ({cfg.device})",
-        "torch": torch.__version__,
-        "cuda_runtime": torch.version.cuda,
-    }
-    if device is not None and device.type == "cuda":
-        index = device.index if device.index is not None else torch.cuda.current_device()
-        props = torch.cuda.get_device_properties(index)
-        hardware.update(
-            {
-                "name": props.name,
-                "total_memory_bytes": int(props.total_memory),
-                "bf16_supported": bool(torch.cuda.is_bf16_supported()),
+    persistent_report = None
+    if args.persistent_root:
+        persistent_root = _repo_path(root, args.persistent_root)
+        if not persistent_root.exists():
+            failures.append(f"persistent root does not exist: {persistent_root}")
+        elif not _inside(output_dir, persistent_root):
+            failures.append(
+                f"output_dir is not underneath persistent root: output={output_dir} root={persistent_root}"
+            )
+        else:
+            probe = output_dir if output_dir.exists() else output_dir.parent
+            usage = shutil.disk_usage(probe)
+            generation_sizes = [
+                path.stat().st_size
+                for path in candidate_checkpoint_paths(output_dir)
+                if path.exists()
+            ]
+            checkpoint_bytes = max(generation_sizes, default=None)
+            required_free = 3 * checkpoint_bytes if checkpoint_bytes else None
+            if required_free is not None and usage.free < required_free:
+                failures.append(
+                    f"insufficient free space for previous+current+temporary checkpoint: "
+                    f"free={usage.free} required~={required_free}"
+                )
+            persistent_report = {
+                "root": str(persistent_root),
+                "output_dir": str(output_dir),
+                "free_bytes": int(usage.free),
+                "observed_checkpoint_bytes": checkpoint_bytes,
+                "recommended_min_free_bytes": required_free,
             }
-        )
 
+    hardware = hardware_provenance(device)
     batching = None
     if data_manifest is not None:
         microbatch_tokens = cfg.batch_size * data_manifest.sequence_length
@@ -149,14 +231,20 @@ def main() -> None:
 
     report = {
         "status": "pass" if not failures else "fail",
+        "requested_mode": args.mode,
+        "effective_mode": effective_mode,
         "config": str(config_path),
-        "source": {"git_commit": commit, "git_dirty": dirty},
+        "source": source,
         "precision": {"parameter_dtype": cfg.dtype, "autocast_dtype": cfg.autocast_dtype},
         "batching": batching,
         "model_verification": model_verification,
         "hardware": hardware,
         "data_manifest_sha256": manifest_sha256,
         "checkpoint_hashes": checkpoint_hashes,
+        "selected_checkpoint": str(selected_checkpoint) if selected_checkpoint else None,
+        "selected_checkpoint_metadata": selected_checkpoint_metadata,
+        "persistent_storage": persistent_report,
+        "warnings": warnings,
         "failures": failures,
     }
     print(json.dumps(report, indent=2, sort_keys=True))

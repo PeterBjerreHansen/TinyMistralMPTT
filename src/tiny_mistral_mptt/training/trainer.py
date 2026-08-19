@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from collections import defaultdict
 import json
+import os
 from pathlib import Path
 import random
-import subprocess
 import time
+from typing import Callable
 
 import torch
+from safetensors.torch import save_file as save_safetensors
 
 from tiny_mistral.device import synchronize
 
@@ -19,15 +21,19 @@ from ..evaluation.nll import evaluate_nll
 from ..evaluation.pass_depth import evaluate_pass_depth
 from ..variants.base import ExperimentalVariant
 from ..variants.multipass import MultiPassVariant
-from .checkpoint import TrainState, load_checkpoint, load_model_weights, save_checkpoint
+from .checkpoint import (
+    TrainState,
+    load_checkpoint,
+    load_latest_valid_checkpoint,
+    load_model_weights,
+    inspect_checkpoint,
+    save_checkpoint_generation,
+)
+from .journal import append_jsonl, repair_metrics_to_checkpoint
 from .pass_schedule import PassScheduler
 from .phases import configure_phase
+from .provenance import hardware_provenance, source_provenance
 from .schedule import lr_multiplier
-
-
-def _append_jsonl(path: Path, item: dict) -> None:
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(item, sort_keys=True) + "\n")
 
 
 def _set_seed(seed: int) -> None:
@@ -41,25 +47,34 @@ def _parameter_count(parameters) -> int:
     return sum(parameter.numel() for parameter in parameters)
 
 
-def _source_provenance() -> dict[str, bool | str | None]:
-    """Return the source revision used to create a run manifest."""
-    repository = Path(__file__).resolve().parents[3]
-    try:
-        commit = subprocess.check_output(
-            ["git", "-C", str(repository), "rev-parse", "HEAD"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-        dirty = bool(
-            subprocess.check_output(
-                ["git", "-C", str(repository), "status", "--porcelain"],
-                text=True,
-                stderr=subprocess.DEVNULL,
-            ).strip()
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return {"git_commit": None, "git_dirty": None}
-    return {"git_commit": commit, "git_dirty": dirty}
+def _atomic_write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+    if os.name != "nt":
+        fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+def _next_segment_id(path: Path) -> int:
+    maximum = 0
+    if path.exists():
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    record = json.loads(line)
+                    maximum = max(maximum, int(record.get("segment", 0)))
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    continue
+    return maximum + 1
 
 
 class Trainer:
@@ -71,8 +86,13 @@ class Trainer:
         train_data: PackedTokenDataset,
         validation_data: PackedTokenDataset,
         device: torch.device,
+        resume_auto: bool = False,
+        allow_source_mismatch: bool = False,
+        stop_requested: Callable[[], bool] | None = None,
     ):
         config.validate()
+        if resume_auto and (config.resume_from or config.init_from):
+            raise ValueError("resume_auto is mutually exclusive with resume_from/init_from")
         if train_data.manifest != validation_data.manifest:
             raise ValueError("train and validation datasets must come from the same artifact")
         self.model = model
@@ -80,9 +100,19 @@ class Trainer:
         self.train_data = train_data
         self.validation_data = validation_data
         self.device = device
+        self.resume_auto = bool(resume_auto)
+        self.allow_source_mismatch = bool(allow_source_mismatch)
+        self.stop_requested = stop_requested or (lambda: False)
         self.run_dir = Path(config.output_dir)
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.metrics_path = self.run_dir / "metrics.jsonl"
+        self.segments_path = self.run_dir / "segments.jsonl"
+        self.run_info_path = self.run_dir / "run.json"
+        run_info_preexisting = self.run_info_path.exists()
+        self.repository = Path(__file__).resolve().parents[3]
+        self.source = source_provenance(self.repository)
+        self.hardware = hardware_provenance(device)
+
         verify_artifact(config.data_dir)
         self.manifest_path = Path(config.data_dir) / "manifest.json"
         self.manifest_sha256 = file_sha256(self.manifest_path)
@@ -93,9 +123,7 @@ class Trainer:
 
         initialization_provenance = None
         if config.init_from:
-            initialization_provenance = load_model_weights(
-                config.init_from, model=self.model
-            )
+            initialization_provenance = load_model_weights(config.init_from, model=self.model)
             initialization_provenance["source_sha256"] = file_sha256(config.init_from)
 
         trainable = configure_phase(model, config.phase)
@@ -121,7 +149,7 @@ class Trainer:
             config.max_unique_tokens + nominal_optimizer_batch_tokens - 1
         ) // nominal_optimizer_batch_tokens
         run_info = {
-            "source": _source_provenance(),
+            "source": self.source,
             "config": config.to_dict(),
             "batching": {
                 "sequence_length": train_data.sequence_length,
@@ -145,25 +173,129 @@ class Trainer:
             "added_parameters_total": _parameter_count(model.added_parameters()),
             "initialization_provenance": initialization_provenance,
         }
-        (self.run_dir / "run.json").write_text(
-            json.dumps(run_info, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
 
-        if config.resume_from:
+        is_resume_request = bool(config.resume_from or resume_auto)
+        if self.run_info_path.exists():
+            if not is_resume_request:
+                raise FileExistsError(
+                    f"output_dir already contains run.json; refuse to start a fresh run in {self.run_dir}"
+                )
+        else:
+            if resume_auto:
+                # Auto mode starts fresh only when the entire run directory is
+                # effectively new. Stray trajectory artifacts are ambiguous.
+                occupied = any(
+                    path.exists()
+                    for path in (
+                        self.metrics_path,
+                        self.segments_path,
+                        self.run_dir / "checkpoints",
+                    )
+                )
+                if occupied:
+                    raise RuntimeError("resume_auto found run artifacts but no run.json; refusing to guess")
+            _atomic_write_json(self.run_info_path, run_info)
+
+        selected_checkpoint: Path | None = None
+        fallback_used = False
+        self._pending_validation_recovery = False
+        if resume_auto and self.run_info_path.exists():
+            try:
+                selected_checkpoint, self.state, sampler_state, fallback_used = load_latest_valid_checkpoint(
+                    self.run_dir,
+                    model=self.model,
+                    optimizer=self.optimizer,
+                    expected_manifest_sha256=self.manifest_sha256,
+                    expected_experiment_config=config.to_dict(),
+                    expected_source_provenance=self.source,
+                    allow_source_mismatch=self.allow_source_mismatch,
+                    pass_scheduler=self.pass_scheduler,
+                )
+            except FileNotFoundError:
+                # Fresh auto-mode may start from zero only when this invocation
+                # created run.json. A pre-existing run without a recoverable
+                # checkpoint is ambiguous and therefore a hard failure.
+                if run_info_preexisting:
+                    raise RuntimeError("existing run has no recoverable checkpoint")
+            else:
+                self._finish_resume(sampler_state)
+        elif config.resume_from:
+            selected_checkpoint = Path(config.resume_from)
             self.state, sampler_state = load_checkpoint(
-                config.resume_from,
+                selected_checkpoint,
                 model=self.model,
                 optimizer=self.optimizer,
                 expected_manifest_sha256=self.manifest_sha256,
                 expected_experiment_config=config.to_dict(),
+                expected_source_provenance=self.source,
+                allow_source_mismatch=self.allow_source_mismatch,
                 pass_scheduler=self.pass_scheduler,
             )
-            self._repair_optimizer_group_metadata()
-            if self.state.phase != config.phase:
-                raise ValueError(
-                    f"checkpoint phase {self.state.phase!r} does not match requested phase {config.phase!r}"
-                )
-            self.sampler.load_state_dict(sampler_state)
+            self._finish_resume(sampler_state)
+
+        self.segment_id = _next_segment_id(self.segments_path)
+        if selected_checkpoint is not None:
+            repair = repair_metrics_to_checkpoint(self.metrics_path, self.state)
+            metadata = inspect_checkpoint(selected_checkpoint)
+            pending_validation = bool(
+                metadata.get("checkpoint_metadata", {}).get("pending_validation")
+            )
+            self._pending_validation_recovery = (
+                pending_validation and not self._validation_record_exists_at_current_state()
+            )
+            append_jsonl(
+                self.metrics_path,
+                {
+                    "event": "resume",
+                    "run_segment": self.segment_id,
+                    "checkpoint": str(selected_checkpoint),
+                    "fallback_used": bool(fallback_used),
+                    "optimizer_steps": self.state.optimizer_steps,
+                    "unique_tokens_seen": self.state.unique_tokens_seen,
+                    "token_equivalent_compute": self.state.token_equivalent_compute,
+                    "metrics_repair": repair,
+                },
+                durable=True,
+            )
+        append_jsonl(
+            self.segments_path,
+            {
+                "event": "segment_start",
+                "segment": self.segment_id,
+                "parent_checkpoint": str(selected_checkpoint) if selected_checkpoint else None,
+                "start_unique_tokens": self.state.unique_tokens_seen,
+                "source": self.source,
+                "hardware": self.hardware,
+            },
+            durable=True,
+        )
+        self._last_checkpoint_tokens = self.state.unique_tokens_seen
+        self._last_checkpoint_time = time.monotonic()
+
+    def _finish_resume(self, sampler_state: dict) -> None:
+        self._repair_optimizer_group_metadata()
+        if self.state.phase != self.config.phase:
+            raise ValueError(
+                f"checkpoint phase {self.state.phase!r} does not match requested phase {self.config.phase!r}"
+            )
+        self.sampler.load_state_dict(sampler_state)
+
+    def _validation_record_exists_at_current_state(self) -> bool:
+        if not self.metrics_path.exists():
+            return False
+        with self.metrics_path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (
+                    record.get("event") == "validation"
+                    and int(record.get("optimizer_steps", -1)) == self.state.optimizer_steps
+                    and int(record.get("unique_tokens_seen", -1)) == self.state.unique_tokens_seen
+                ):
+                    return True
+        return False
 
     def _build_optimizer(self) -> torch.optim.Optimizer:
         added_ids = {id(parameter) for parameter in self.model.added_parameters()}
@@ -203,7 +335,6 @@ class Trainer:
         return torch.optim.AdamW(groups, foreach=False)
 
     def _repair_optimizer_group_metadata(self) -> None:
-        """Restore research-only optimizer metadata absent from v1 checkpoints."""
         added_ids = {id(parameter) for parameter in self.model.added_parameters()}
         for group in self.optimizer.param_groups:
             flags = {id(parameter) in added_ids for parameter in group["params"]}
@@ -212,7 +343,10 @@ class Trainer:
             is_added = next(iter(flags))
             name = "added" if is_added else "pretrained"
             group.setdefault("group_name", name)
-            group.setdefault("base_lr", self.config.added_lr if is_added else self.config.pretrained_lr)
+            group.setdefault(
+                "base_lr",
+                self.config.added_lr if is_added else self.config.pretrained_lr,
+            )
 
     def _set_lr(self) -> dict[str, float]:
         multiplier = lr_multiplier(
@@ -227,16 +361,15 @@ class Trainer:
             base_lr = float(group["base_lr"])
             group["lr"] = base_lr * multiplier
             result[f"lr_{group['group_name']}"] = float(group["lr"])
-        # Backwards-compatible scalar for existing plotting scripts.
         if "lr_pretrained" in result:
             result["lr"] = result["lr_pretrained"]
         elif "lr_added" in result:
             result["lr"] = result["lr_added"]
         return result
 
-    def _checkpoint(self) -> Path:
-        return save_checkpoint(
-            self.run_dir / "latest.pt",
+    def _checkpoint(self, *, pending_validation: bool = False) -> Path:
+        path = save_checkpoint_generation(
+            self.run_dir,
             model=self.model,
             optimizer=self.optimizer,
             sampler_state=self.sampler.state_dict(),
@@ -244,7 +377,27 @@ class Trainer:
             train_state=self.state,
             experiment_config=self.config.to_dict(),
             data_manifest_sha256=self.manifest_sha256,
+            source_provenance=self.source,
+            checkpoint_metadata={"pending_validation": bool(pending_validation)},
+            keep_last=self.config.checkpoint_keep_last,
         )
+        self._last_checkpoint_tokens = self.state.unique_tokens_seen
+        self._last_checkpoint_time = time.monotonic()
+        return path
+
+    def _checkpoint_due(self) -> bool:
+        cfg = self.config
+        token_due = bool(
+            cfg.checkpoint_every_tokens
+            and self.state.unique_tokens_seen - self._last_checkpoint_tokens
+            >= cfg.checkpoint_every_tokens
+        )
+        time_due = bool(
+            cfg.checkpoint_every_seconds
+            and time.monotonic() - self._last_checkpoint_time
+            >= cfg.checkpoint_every_seconds
+        )
+        return token_due or time_due
 
     def _pass_schedule_metrics(self) -> dict[str, object]:
         return {
@@ -272,6 +425,7 @@ class Trainer:
             )
             record = {
                 "event": "validation",
+                "run_segment": self.segment_id,
                 "optimizer_steps": self.state.optimizer_steps,
                 "unique_tokens_seen": self.state.unique_tokens_seen,
                 "token_equivalent_compute": self.state.token_equivalent_compute,
@@ -294,6 +448,7 @@ class Trainer:
             )
             record = {
                 "event": "validation",
+                "run_segment": self.segment_id,
                 "optimizer_steps": self.state.optimizer_steps,
                 "unique_tokens_seen": self.state.unique_tokens_seen,
                 "token_equivalent_compute": self.state.token_equivalent_compute,
@@ -304,8 +459,63 @@ class Trainer:
                 "eval_passes": 1,
                 **self._pass_schedule_metrics(),
             }
-        _append_jsonl(self.metrics_path, record)
+        append_jsonl(self.metrics_path, record)
         return record
+
+    def _snapshot_crossed(self, previous_tokens: int) -> None:
+        thresholds = self.config.snapshot_at_tokens or []
+        for threshold in thresholds:
+            if not previous_tokens < threshold <= self.state.unique_tokens_seen:
+                continue
+            snapshot_dir = self.run_dir / "snapshots"
+            snapshot_dir.mkdir(parents=True, exist_ok=True)
+            actual = self.state.unique_tokens_seen
+            path = snapshot_dir / f"model_{actual:012d}.safetensors"
+            if path.exists():
+                continue
+            tensors = {
+                name: tensor.detach().cpu().contiguous()
+                for name, tensor in self.model.state_dict().items()
+            }
+            temporary = path.with_name(path.name + ".tmp")
+            save_safetensors(tensors, str(temporary))
+            with temporary.open("rb") as handle:
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+            metadata = {
+                "requested_threshold": threshold,
+                "unique_tokens_seen": actual,
+                "optimizer_steps": self.state.optimizer_steps,
+                "source": self.source,
+                "data_manifest_sha256": self.manifest_sha256,
+                "variant": self.config.variant,
+                "phase": self.config.phase,
+            }
+            _atomic_write_json(path.with_suffix(".json"), metadata)
+            append_jsonl(
+                self.metrics_path,
+                {
+                    "event": "snapshot",
+                    "run_segment": self.segment_id,
+                    "path": str(path),
+                    "requested_threshold": threshold,
+                    "unique_tokens_seen": actual,
+                    "optimizer_steps": self.state.optimizer_steps,
+                },
+            )
+
+    def _end_segment(self, reason: str) -> None:
+        append_jsonl(
+            self.segments_path,
+            {
+                "event": "segment_end",
+                "segment": self.segment_id,
+                "end_unique_tokens": self.state.unique_tokens_seen,
+                "optimizer_steps": self.state.optimizer_steps,
+                "reason": reason,
+            },
+            durable=True,
+        )
 
     def train(self, *, until_unique_tokens: int | None = None) -> TrainState:
         cfg = self.config
@@ -321,12 +531,12 @@ class Trainer:
             ((self.state.unique_tokens_seen // cfg.eval_every_tokens) + 1) * cfg.eval_every_tokens
             if cfg.eval_every_tokens else None
         )
-        next_checkpoint = (
-            ((self.state.unique_tokens_seen // cfg.checkpoint_every_tokens) + 1) * cfg.checkpoint_every_tokens
-            if cfg.checkpoint_every_tokens else None
-        )
+        if self._pending_validation_recovery:
+            self._evaluate()
+            self._pending_validation_recovery = False
         self.model.train()
         while self.state.unique_tokens_seen < target_tokens:
+            previous_tokens = self.state.unique_tokens_seen
             start = time.perf_counter()
             self.optimizer.zero_grad(set_to_none=True)
             update_loss = 0.0
@@ -367,6 +577,7 @@ class Trainer:
             elapsed = max(time.perf_counter() - start, 1e-9)
             record = {
                 "event": "train",
+                "run_segment": self.segment_id,
                 "phase": cfg.phase,
                 "optimizer_steps": self.state.optimizer_steps,
                 "micro_steps": self.state.micro_steps,
@@ -386,18 +597,32 @@ class Trainer:
             record.update(
                 {key: value / accumulation_steps for key, value in sorted(update_metrics.items())}
             )
-            _append_jsonl(self.metrics_path, record)
+            append_jsonl(self.metrics_path, record)
+            self._snapshot_crossed(previous_tokens)
 
-            if next_eval is not None and self.state.unique_tokens_seen >= next_eval:
+            eval_due = next_eval is not None and self.state.unique_tokens_seen >= next_eval
+            # Checkpoint *before* any expensive read-only evaluation. If an
+            # eviction happens inside evaluation, no newly trained state is lost.
+            if self._checkpoint_due() or (
+                eval_due and self.state.unique_tokens_seen > self._last_checkpoint_tokens
+            ):
+                self._checkpoint(pending_validation=bool(eval_due))
+
+            if eval_due:
                 self._evaluate()
-                while next_eval <= self.state.unique_tokens_seen:
+                while next_eval is not None and next_eval <= self.state.unique_tokens_seen:
                     next_eval += cfg.eval_every_tokens
-            if next_checkpoint is not None and self.state.unique_tokens_seen >= next_checkpoint:
-                self._checkpoint()
-                while next_checkpoint <= self.state.unique_tokens_seen:
-                    next_checkpoint += cfg.checkpoint_every_tokens
+                self.model.train()
 
-        self._checkpoint()
+            if self.stop_requested():
+                if self.state.unique_tokens_seen > self._last_checkpoint_tokens:
+                    self._checkpoint()
+                self._end_segment("signal")
+                return self.state
+
+        if self.state.unique_tokens_seen > self._last_checkpoint_tokens:
+            self._checkpoint()
         if cfg.eval_batches:
             self._evaluate()
+        self._end_segment("completed")
         return self.state

@@ -1,0 +1,80 @@
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+from .checkpoint import TrainState
+
+
+def append_jsonl(path: str | Path, item: dict[str, Any], *, durable: bool = False) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(item, sort_keys=True) + "\n")
+        if durable:
+            handle.flush()
+            os.fsync(handle.fileno())
+
+
+def _record_is_committed(record: dict[str, Any], state: TrainState) -> bool:
+    event = record.get("event")
+    if event == "train":
+        try:
+            return int(record["optimizer_steps"]) <= state.optimizer_steps
+        except (KeyError, TypeError, ValueError):
+            return False
+    if event == "validation":
+        try:
+            return int(record["unique_tokens_seen"]) <= state.unique_tokens_seen
+        except (KeyError, TypeError, ValueError):
+            return False
+    if event in {"resume", "snapshot"}:
+        try:
+            return int(record.get("unique_tokens_seen", 0)) <= state.unique_tokens_seen
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def repair_metrics_to_checkpoint(path: str | Path, state: TrainState) -> dict[str, int]:
+    """Make an append-only metrics log agree with the durable checkpoint.
+
+    A spot loss can leave metric rows ahead of the most recent checkpoint or a
+    partially written final JSON record. The checkpoint is the source of truth;
+    rows that describe uncommitted training are discarded atomically.
+    """
+    path = Path(path)
+    if not path.exists():
+        return {"kept": 0, "dropped": 0, "malformed": 0}
+    kept: list[str] = []
+    dropped = 0
+    malformed = 0
+    with path.open("r", encoding="utf-8", errors="strict") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                malformed += 1
+                continue
+            if isinstance(record, dict) and _record_is_committed(record, state):
+                kept.append(json.dumps(record, sort_keys=True))
+            else:
+                dropped += 1
+    temporary = path.with_name(path.name + ".repair.tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
+        for line in kept:
+            handle.write(line + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+    if os.name != "nt":
+        fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    return {"kept": len(kept), "dropped": dropped, "malformed": malformed}

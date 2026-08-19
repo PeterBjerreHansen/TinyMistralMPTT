@@ -57,14 +57,6 @@ def _coerce_pass_loss_weights_by_k(raw: Any) -> dict[int, list[float]]:
 
 
 def normalize_pass_schedule(raw: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    """Validate and normalize a token-indexed pass-count schedule.
-
-    Each stage has ``probabilities`` and may have an exclusive ``until_tokens``
-    bound. The last stage must be unbounded. Example::
-
-        [{"until_tokens": 1_000_000, "probabilities": {2: 1.0}},
-         {"probabilities": {1: .5, 2: .45, 3: .05}}]
-    """
     if raw is None:
         return [{"until_tokens": None, "probabilities": {1: 1.0}}]
     if not isinstance(raw, list) or not raw:
@@ -152,8 +144,6 @@ class ExperimentConfig:
     grad_accum_steps: int = 1
     max_unique_tokens: int = 65_536
 
-    # ``learning_rate`` remains the backwards-compatible vanilla/base default.
-    # Phase-B parameter groups may override it independently.
     learning_rate: float = 1e-6
     pretrained_learning_rate: float | None = None
     added_learning_rate: float | None = None
@@ -167,8 +157,13 @@ class ExperimentConfig:
     eval_batches: int = 16
     eval_passes: int = 1
     checkpoint_every_tokens: int = 65_536
+    # Spot-safe checkpointing. Zero disables the wall-clock trigger.
+    checkpoint_every_seconds: float = 0.0
+    # Generation mode deliberately requires at least two resumable states.
+    checkpoint_keep_last: int = 2
+    # Optional weights-only scientific snapshots; these never drive resume.
+    snapshot_at_tokens: list[int] | None = None
 
-    # Architecture/training protocol knobs.
     phase: str = "B"
     pass_schedule: list[dict[str, Any]] | None = None
     pass_loss_weights: list[float] | None = None
@@ -176,8 +171,6 @@ class ExperimentConfig:
     memory_window: int = 32
     prefix_mixin_probability: float = 0.0
 
-    # ``resume_from`` restores the exact run. ``init_from`` loads model weights
-    # only and begins a fresh trajectory/optimizer/data schedule.
     resume_from: str | None = None
     init_from: str | None = None
 
@@ -186,6 +179,8 @@ class ExperimentConfig:
             self.pass_loss_weights_by_k = _coerce_pass_loss_weights_by_k(
                 self.pass_loss_weights_by_k
             )
+        if self.snapshot_at_tokens is not None:
+            self.snapshot_at_tokens = sorted({int(value) for value in self.snapshot_at_tokens})
 
     def normalized_pass_schedule(self) -> list[dict[str, Any]]:
         return normalize_pass_schedule(self.pass_schedule)
@@ -205,9 +200,7 @@ class ExperimentConfig:
             try:
                 return self.pass_loss_weights_by_k[passes]
             except KeyError as exc:
-                raise ValueError(
-                    f"no pass-loss weights configured for sampled K={passes}"
-                ) from exc
+                raise ValueError(f"no pass-loss weights configured for sampled K={passes}") from exc
         return self.pass_loss_weights
 
     def validate(self) -> None:
@@ -219,13 +212,10 @@ class ExperimentConfig:
             raise ValueError("resume_from and init_from are mutually exclusive")
         if self.autocast_dtype is not None:
             if self.autocast_dtype not in SUPPORTED_AUTOCAST_DTYPES:
-                raise ValueError(
-                    f"autocast_dtype must be one of {sorted(SUPPORTED_AUTOCAST_DTYPES)}"
-                )
+                raise ValueError(f"autocast_dtype must be one of {sorted(SUPPORTED_AUTOCAST_DTYPES)}")
             if self.dtype != "float32":
                 raise ValueError(
-                    "autocast training requires dtype=float32 so learned parameters "
-                    "and AdamW state remain FP32"
+                    "autocast training requires dtype=float32 so learned parameters and AdamW state remain FP32"
                 )
         if self.batch_size <= 0 or self.grad_accum_steps <= 0:
             raise ValueError("batch_size and grad_accum_steps must be positive")
@@ -252,6 +242,13 @@ class ExperimentConfig:
             raise ValueError("eval_passes must be positive")
         if self.checkpoint_every_tokens < 0:
             raise ValueError("checkpoint_every_tokens must be non-negative")
+        if not math.isfinite(float(self.checkpoint_every_seconds)) or self.checkpoint_every_seconds < 0:
+            raise ValueError("checkpoint_every_seconds must be finite and non-negative")
+        if self.checkpoint_keep_last < 2:
+            raise ValueError("checkpoint_keep_last must be at least 2")
+        if self.snapshot_at_tokens is not None:
+            if any(value <= 0 or value > self.max_unique_tokens for value in self.snapshot_at_tokens):
+                raise ValueError("snapshot_at_tokens values must lie in (0, max_unique_tokens]")
         if self.memory_window <= 0:
             raise ValueError("memory_window must be positive")
         if (
@@ -260,9 +257,7 @@ class ExperimentConfig:
         ):
             raise ValueError("prefix_mixin_probability must be finite and in [0, 1]")
         if self.variant != "fbt" and self.prefix_mixin_probability != 0.0:
-            raise ValueError(
-                "prefix_mixin_probability is currently supported only for variant=fbt"
-            )
+            raise ValueError("prefix_mixin_probability is currently supported only for variant=fbt")
         schedule = self.normalized_pass_schedule()
         pass_counts = {passes for stage in schedule for passes in stage["probabilities"]}
         if self.variant == "vanilla" and pass_counts != {1}:
@@ -274,9 +269,7 @@ class ExperimentConfig:
         if self.phase == "A" and any(passes < 2 for passes in pass_counts):
             raise ValueError("Phase A for multipass variants requires at least two passes on every batch")
         if self.pass_loss_weights is not None and self.pass_loss_weights_by_k is not None:
-            raise ValueError(
-                "pass_loss_weights and pass_loss_weights_by_k are mutually exclusive"
-            )
+            raise ValueError("pass_loss_weights and pass_loss_weights_by_k are mutually exclusive")
         if self.pass_loss_weights is not None:
             if not self.pass_loss_weights:
                 raise ValueError("pass_loss_weights must not be empty")
