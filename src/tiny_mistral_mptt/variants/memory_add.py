@@ -91,6 +91,8 @@ class MemoryAddVariant(MultiPassVariant):
         token_embedding: torch.Tensor,
         feedback_memory: torch.Tensor,
         past_key_values: tuple[LayerKVCache, ...],
+        *,
+        token: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, tuple[LayerKVCache, ...]]:
         if token_embedding.ndim != 3 or token_embedding.shape[1] != 1:
             raise ValueError("token_embedding must be [B,1,D]")

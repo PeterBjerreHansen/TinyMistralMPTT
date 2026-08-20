@@ -13,6 +13,7 @@ import torch
 import yaml
 
 from tiny_mistral.device import resolve_device, synchronize
+from tiny_mistral_mptt.data.packed_dataset import insert_memory_tokens
 from tiny_mistral_mptt.model_factory import load_variant
 from tiny_mistral_mptt.precision import PrecisionNotSupportedError, autocast_context
 from tiny_mistral_mptt.training.phases import configure_phase
@@ -182,11 +183,34 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
     model_dir = str(case.get("model_dir", DEFAULT_MODEL_DIR))
     attention_backend = str(case.get("attention_backend", "auto"))
     memory_window = int(case.get("memory_window", 32))
-    memory_write_mode = str(case.get("memory_write_mode", "periodic"))
-    memory_write_stride = int(case.get("memory_write_stride", 8))
-    memory_token_id = case.get("memory_token_id")
-    if memory_token_id is not None:
-        memory_token_id = int(memory_token_id)
+    memory_write_mode = case.get("memory_write_mode")
+    if memory_write_mode is not None:
+        memory_write_mode = str(memory_write_mode)
+    memory_write_stride = case.get("memory_write_stride")
+    if memory_write_stride is not None:
+        memory_write_stride = int(memory_write_stride)
+    memory_token_visibility = case.get("memory_token_visibility")
+    if memory_token_visibility is not None:
+        memory_token_visibility = str(memory_token_visibility)
+
+    is_tape = variant in {"tape", "tape_add_hybrid"}
+    if is_tape:
+        if memory_write_mode not in {"dense", "periodic", "memory_token"}:
+            raise ValueError("tape efficiency cases require memory_write_mode: dense|periodic|memory_token")
+        if memory_write_mode == "dense":
+            if memory_write_stride is not None:
+                raise ValueError("dense tape efficiency cases must not set memory_write_stride")
+            if memory_token_visibility is not None:
+                raise ValueError("memory_token_visibility applies only to memory_token mode")
+        else:
+            if memory_write_stride is None or memory_write_stride <= 0:
+                raise ValueError(f"{memory_write_mode} tape requires positive memory_write_stride")
+            if memory_write_mode == "periodic" and memory_token_visibility is not None:
+                raise ValueError("memory_token_visibility applies only to memory_token mode")
+            if memory_write_mode == "memory_token" and memory_token_visibility not in {"visible", "write_only"}:
+                raise ValueError("memory_token tape requires memory_token_visibility: visible|write_only")
+    elif any(value is not None for value in (memory_write_mode, memory_write_stride, memory_token_visibility)):
+        raise ValueError("memory_* efficiency fields apply only to tape variants")
 
     if passes not in WEIGHTS_BY_K:
         raise ValueError("efficiency benchmark currently supports K=1,2,3")
@@ -209,6 +233,7 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
         "variant": variant,
         "passes": passes,
         "sequence_length": sequence_length,
+        "linguistic_sequence_length": sequence_length,
         "batch_size": batch_size,
         "grad_accum_steps": grad_accum_steps,
         "microbatch_tokens": batch_size * sequence_length,
@@ -219,7 +244,7 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
         "memory_window": memory_window,
         "memory_write_mode": memory_write_mode,
         "memory_write_stride": memory_write_stride,
-        "memory_token_id": memory_token_id,
+        "memory_token_visibility": memory_token_visibility,
         "warmup_steps": warmup_steps,
         "measure_steps": measure_steps,
         "status": "running",
@@ -239,7 +264,7 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
             memory_window=memory_window,
             memory_write_mode=memory_write_mode,
             memory_write_stride=memory_write_stride,
-            memory_token_id=memory_token_id,
+            memory_token_visibility=memory_token_visibility,
         )
         configure_phase(model, "B")
         model.train()
@@ -253,6 +278,19 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
             (batch_size, sequence_length),
             device=device,
             dtype=torch.long,
+        )
+        if memory_write_mode == "memory_token":
+            assert memory_write_stride is not None
+            ids = insert_memory_tokens(
+                ids,
+                memory_token_id=vocab_size,
+                interval=memory_write_stride,
+            )
+        model_sequence_length = int(ids.shape[1])
+        result["model_sequence_length"] = model_sequence_length
+        result["microbatch_model_positions"] = batch_size * model_sequence_length
+        result["optimizer_batch_model_positions"] = (
+            batch_size * model_sequence_length * grad_accum_steps
         )
         weights = WEIGHTS_BY_K[passes]
 
@@ -294,7 +332,8 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
         elapsed = max(time.perf_counter() - started, 1e-12)
 
         unique_tokens = batch_size * sequence_length * grad_accum_steps * measure_steps
-        pass_tokens = unique_tokens * passes
+        model_positions = batch_size * model_sequence_length * grad_accum_steps * measure_steps
+        pass_positions = model_positions * passes
         unique_tokens_per_second = unique_tokens / elapsed
         result.update(
             {
@@ -305,7 +344,8 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
                 "optimizer_steps_per_second": measure_steps / elapsed,
                 "microbatches_per_second": (measure_steps * grad_accum_steps) / elapsed,
                 "unique_tokens_per_second": unique_tokens_per_second,
-                "pass_tokens_per_second": pass_tokens / elapsed,
+                "model_positions_per_second": model_positions / elapsed,
+                "pass_positions_per_second": pass_positions / elapsed,
                 "estimated_hours_per_100m_unique_tokens": 100_000_000.0
                 / unique_tokens_per_second
                 / 3600.0,

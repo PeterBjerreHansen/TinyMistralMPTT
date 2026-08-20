@@ -50,3 +50,21 @@ def test_padding_forces_correct_reference_fallback():
         ya, _ = a(x, attention_mask=mask, position_ids=pos)
         yb, _ = b(x, attention_mask=mask, position_ids=pos)
     torch.testing.assert_close(ya, yb)
+
+
+def test_flex_key_validity_mask_matches_reference_when_available():
+    cfg = micro_config(sliding_window=4)
+    ref = MistralAttention(cfg, 0, attention_backend="reference")
+    flex = MistralAttention(cfg, 0, attention_backend="flex", compile_flex=False, flex_block_size=16)
+    flex.load_state_dict(ref.state_dict())
+    ref.eval(); flex.eval()
+    x = torch.randn(2, 17, cfg.hidden_size)
+    pos = torch.arange(17)[None, :].expand(2, -1)
+    # Mimics write-only MEM keys: queries remain present, selected K/V positions do not.
+    valid = torch.ones(2, 17, dtype=torch.bool)
+    valid[:, [3, 8, 13]] = False
+    with torch.no_grad(), warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        yr, _ = ref(x, attention_mask=valid, position_ids=pos, use_cache=False)
+        yf, _ = flex(x, attention_mask=valid, position_ids=pos, use_cache=False)
+    torch.testing.assert_close(yf, yr, atol=3e-5, rtol=3e-5)

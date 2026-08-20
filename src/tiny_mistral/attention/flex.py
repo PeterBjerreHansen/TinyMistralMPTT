@@ -58,6 +58,7 @@ def flex_local_attention(
     value: torch.Tensor,
     *,
     sliding_window: int | None,
+    key_padding_mask: torch.Tensor | None = None,
     compile_kernel: bool = True,
     block_size: int = 128,
 ) -> torch.Tensor:
@@ -79,13 +80,36 @@ def flex_local_attention(
 
     seq_len = query.shape[-2]
     device = query.device
-    block_mask = _cached_local_block_mask(
-        seq_len,
-        sliding_window,
-        device.type,
-        device.index,
-        block_size,
-    )
+    if key_padding_mask is not None:
+        if key_padding_mask.shape != (query.shape[0], seq_len) or key_padding_mask.dtype != torch.bool:
+            raise ValueError("key_padding_mask must be bool [B,T]")
+        if create_block_mask is None:
+            raise RuntimeError("FlexAttention is unavailable; install PyTorch >= 2.5")
+        if sliding_window is None:
+            def mask_mod(b, h, q_idx, kv_idx):
+                return (kv_idx <= q_idx) & key_padding_mask[b, kv_idx]
+        else:
+            window = int(sliding_window)
+            def mask_mod(b, h, q_idx, kv_idx):
+                return (kv_idx <= q_idx) & ((q_idx - kv_idx) < window) & key_padding_mask[b, kv_idx]
+        block_mask = create_block_mask(
+            mask_mod,
+            B=query.shape[0],
+            H=None,
+            Q_LEN=seq_len,
+            KV_LEN=seq_len,
+            device=device,
+            BLOCK_SIZE=block_size,
+            _compile=(device.type == "cuda"),
+        )
+    else:
+        block_mask = _cached_local_block_mask(
+            seq_len,
+            sliding_window,
+            device.type,
+            device.index,
+            block_size,
+        )
     fn = _compiled_flex(dynamic=False) if compile_kernel else flex_attention
     return fn(
         query,

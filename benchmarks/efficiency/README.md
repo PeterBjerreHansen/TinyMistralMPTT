@@ -37,7 +37,7 @@ make select-cuda-batch \
   RESULT=benchmarks/efficiency/results/cuda_batch_qualification.json
 ```
 
-The qualification suite tests K=2 MemoryAdd and MemoryTape32 at 2048 context,
+The qualification suite tests K=2 MemoryAdd and dense Tape at 2048 context,
 FP32 parameter/optimizer storage, BF16 autocast, `grad_accum_steps=1`, and
 microbatches 1/2/4/8. OOM cases are recorded rather than aborting the suite.
 
@@ -111,7 +111,7 @@ uv run python scripts/benchmark_training_efficiency.py \
   --output benchmarks/efficiency/results/generated/cuda_batch.json
 ```
 
-Each successful row records unique tokens/s, pass-tokens/s, optimizer steps/s,
+Each successful row records linguistic tokens/s, physical model positions/s, pass-positions/s, optimizer steps/s,
 microbatches/s, milliseconds/optimizer-step, microbatch tokens,
 optimizer-batch tokens, projected hours per 100M unique tokens,
 parameter/gradient/optimizer-state dtypes, and available memory telemetry. CUDA
@@ -126,9 +126,15 @@ invalidating the whole precision suite.
 Compact retained results live under `benchmarks/efficiency/results/`. See
 `docs/PRECISION.md` for the training precision contract.
 
-## Sparse-memory scaling suite
+## Tape write-scaling suite
 
-`benchmarks/efficiency/suites/sparse_memory_scaling.yaml` is an engineering-only
-suite for the architecture branch. It compares dense Tape32, C=1/4/8/16/32
-SparseMemoryTape at W=32, and an initial C=8 hybrid case. These rows characterize
-throughput/VRAM only; they do **not** select the scientific write cadence.
+`benchmarks/efficiency/suites/tape_write_scaling.yaml` compares dense Tape,
+periodic C=1/4/8/16/32 at W=32, and an initial periodic TapeAddHybrid case.
+These are engineering measurements only; they do not select the scientific
+write cadence.
+
+For ordinary/dense/periodic cases, `sequence_length` is both the linguistic and
+physical length. If a future efficiency case uses `memory_token`, the runner
+interprets `sequence_length` as linguistic length, inserts deterministic MEM
+positions into the synthetic block, and reports the resulting
+`model_sequence_length` plus separate physical-position throughput.

@@ -11,10 +11,9 @@ from tiny_mistral.modeling import MistralForCausalLM
 from .variants import (
     ExperimentalVariant,
     FBTVariant,
-    MemoryAddSparseTapeVariant,
     MemoryAddVariant,
-    MemoryTape32Variant,
-    SparseMemoryTapeVariant,
+    TapeAddHybridVariant,
+    TapeVariant,
     VanillaVariant,
 )
 
@@ -28,9 +27,9 @@ def build_variant(
     *,
     architecture_seed: int = 4242,
     memory_window: int = 32,
-    memory_write_mode: str = "periodic",
-    memory_write_stride: int = 8,
-    memory_token_id: int | None = None,
+    memory_write_mode: str | None = None,
+    memory_write_stride: int | None = None,
+    memory_token_visibility: str | None = None,
     prefix_mixin_probability: float = 0.0,
 ) -> ExperimentalVariant:
     if name == "vanilla":
@@ -43,35 +42,41 @@ def build_variant(
         )
     elif name == "memory_add":
         variant = MemoryAddVariant(backbone)
-    elif name == "memory_tape32":
-        variant = MemoryTape32Variant(
-            backbone,
-            memory_window=memory_window,
-            initialization_seed=architecture_seed,
-        )
-    elif name == "sparse_memory_tape":
-        variant = SparseMemoryTapeVariant(
-            backbone,
+    elif name in {"tape", "tape_add_hybrid"}:
+        if memory_write_mode not in {"dense", "periodic", "memory_token"}:
+            raise ValueError("tape variants require memory_write_mode: dense|periodic|memory_token")
+        if memory_write_mode == "dense":
+            if memory_write_stride is not None:
+                raise ValueError("dense tape must not set memory_write_stride")
+            if memory_token_visibility is not None:
+                raise ValueError("dense tape must not set memory_token_visibility")
+            stride = 1
+            visibility = "visible"
+        elif memory_write_mode == "periodic":
+            if memory_write_stride is None or int(memory_write_stride) <= 0:
+                raise ValueError("periodic tape requires positive memory_write_stride")
+            if memory_token_visibility is not None:
+                raise ValueError("memory_token_visibility applies only to memory_token mode")
+            stride = int(memory_write_stride)
+            visibility = "visible"
+        else:
+            if memory_write_stride is None or int(memory_write_stride) <= 0:
+                raise ValueError("memory_token tape requires positive memory_write_stride")
+            if memory_token_visibility not in {"visible", "write_only"}:
+                raise ValueError("memory_token tape requires memory_token_visibility: visible|write_only")
+            stride = int(memory_write_stride)
+            visibility = str(memory_token_visibility)
+        kwargs = dict(
             memory_window=memory_window,
             memory_write_mode=memory_write_mode,
-            memory_write_stride=memory_write_stride,
-            memory_token_id=memory_token_id,
+            memory_write_stride=stride,
+            memory_token_visibility=visibility,
             initialization_seed=architecture_seed,
         )
-    elif name == "memory_add_sparse_tape":
-        variant = MemoryAddSparseTapeVariant(
-            backbone,
-            memory_window=memory_window,
-            memory_write_mode=memory_write_mode,
-            memory_write_stride=memory_write_stride,
-            memory_token_id=memory_token_id,
-            initialization_seed=architecture_seed,
-        )
+        variant = TapeVariant(backbone, **kwargs) if name == "tape" else TapeAddHybridVariant(backbone, **kwargs)
     else:
         raise ValueError(f"unknown variant {name!r}")
 
-    # The checkpoint loader has already placed/cast the backbone. Newly created
-    # research modules are ordinary CPU FP32 modules, so align them once here.
     reference_parameter = next(backbone.parameters())
     variant.to(device=reference_parameter.device, dtype=reference_parameter.dtype)
     return variant
@@ -87,9 +92,9 @@ def load_variant(
     compile_flex: bool = True,
     architecture_seed: int = 4242,
     memory_window: int = 32,
-    memory_write_mode: str = "periodic",
-    memory_write_stride: int = 8,
-    memory_token_id: int | None = None,
+    memory_write_mode: str | None = None,
+    memory_write_stride: int | None = None,
+    memory_token_visibility: str | None = None,
     prefix_mixin_probability: float = 0.0,
 ) -> ExperimentalVariant:
     backbone = load_model(
@@ -106,7 +111,7 @@ def load_variant(
         memory_window=memory_window,
         memory_write_mode=memory_write_mode,
         memory_write_stride=memory_write_stride,
-        memory_token_id=memory_token_id,
+        memory_token_visibility=memory_token_visibility,
         prefix_mixin_probability=prefix_mixin_probability,
     )
 
@@ -116,7 +121,6 @@ def load_variant_from_config(
     *,
     device: str | torch.device | None = None,
 ) -> ExperimentalVariant:
-    """Construct a variant with every architecture knob carried by a config."""
     return load_variant(
         cfg.variant,
         cfg.model_dir,
@@ -127,6 +131,6 @@ def load_variant_from_config(
         memory_window=cfg.memory_window,
         memory_write_mode=cfg.memory_write_mode,
         memory_write_stride=cfg.memory_write_stride,
-        memory_token_id=cfg.memory_token_id,
+        memory_token_visibility=cfg.memory_token_visibility,
         prefix_mixin_probability=cfg.prefix_mixin_probability,
     )

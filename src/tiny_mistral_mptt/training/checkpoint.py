@@ -1,41 +1,27 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from pathlib import Path
+import json
 import os
+from pathlib import Path
 import random
+import re
 from typing import Any
 
 import torch
 
 
-_DEFAULT_EXPERIMENT_FIELDS = {
-    "prefix_mixin_probability": 0.0,
-    "pass_loss_weights_by_k": None,
-    "autocast_dtype": None,
-    "memory_write_mode": "periodic",
-    "memory_write_stride": 8,
-    "memory_token_id": None,
-}
-
-# These one-off FBT calibration controls existed in format-v2 checkpoints but
-# never affect a resumed trajectory after model/optimizer state is restored.
-# Ignore them so current configs can resume historical checkpoints without
-# keeping the retired calibration experiment in the stable config surface.
-_LEGACY_NON_TRAJECTORY_FIELDS = {
-    "fbt_initialization",
-    "fbt_calibration_split",
-    "fbt_calibration_block",
-    "fbt_gate_logit_std_target",
-}
+FORMAT_VERSION = 3
+_CHECKPOINT_RE = re.compile(r"^checkpoint_(\d{12})\.pt$")
 
 
 @dataclass
 class TrainState:
     optimizer_steps: int = 0
     micro_steps: int = 0
-    unique_tokens_seen: int = 0
-    token_equivalent_compute: int = 0
+    unique_tokens_seen: int = 0  # linguistic/data tokens only
+    model_positions_seen: int = 0  # includes input-only control positions
+    token_equivalent_compute: int = 0  # physical positions * effective passes
     phase: str = "B"
 
 
@@ -56,6 +42,65 @@ def restore_rng_state(state: dict[str, Any]) -> None:
         torch.cuda.set_rng_state_all(state["torch_cuda"])
 
 
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _durable_replace_bytes(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    with temporary.open("wb") as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+    _fsync_directory(path.parent)
+
+
+def _checkpoint_payload(
+    *,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    sampler_state: dict,
+    train_state: TrainState,
+    experiment_config: dict,
+    data_manifest_sha256: str,
+    pass_scheduler_state: dict[str, Any] | None,
+    source_provenance: dict[str, Any] | None,
+    checkpoint_metadata: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        "format_version": FORMAT_VERSION,
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "sampler": sampler_state,
+        "pass_scheduler": pass_scheduler_state,
+        "train_state": asdict(train_state),
+        "rng": capture_rng_state(),
+        "experiment_config": experiment_config,
+        "data_manifest_sha256": data_manifest_sha256,
+        "source_provenance": source_provenance,
+        "checkpoint_metadata": checkpoint_metadata or {},
+    }
+
+
+def _save_payload_durable(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    with temporary.open("wb") as handle:
+        torch.save(payload, handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+    _fsync_directory(path.parent)
+
+
 def save_checkpoint(
     path: str | Path,
     *,
@@ -66,31 +111,184 @@ def save_checkpoint(
     experiment_config: dict,
     data_manifest_sha256: str,
     pass_scheduler_state: dict[str, Any] | None = None,
+    source_provenance: dict[str, Any] | None = None,
+    checkpoint_metadata: dict[str, Any] | None = None,
 ) -> Path:
+    """Durably write one explicit checkpoint path.
+
+    Training runs use generation checkpoints below; this small entry point is
+    useful for tests and explicit initialization artifacts.
+    """
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "format_version": 2,
-        "model": model.state_dict(),
-        "optimizer": optimizer.state_dict(),
-        "sampler": sampler_state,
-        "pass_scheduler": pass_scheduler_state,
-        "train_state": asdict(train_state),
-        "rng": capture_rng_state(),
-        "experiment_config": experiment_config,
-        "data_manifest_sha256": data_manifest_sha256,
-    }
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    torch.save(payload, temporary)
-    os.replace(temporary, path)
+    payload = _checkpoint_payload(
+        model=model,
+        optimizer=optimizer,
+        sampler_state=sampler_state,
+        train_state=train_state,
+        experiment_config=experiment_config,
+        data_manifest_sha256=data_manifest_sha256,
+        pass_scheduler_state=pass_scheduler_state,
+        source_provenance=source_provenance,
+        checkpoint_metadata=checkpoint_metadata,
+    )
+    _save_payload_durable(path, payload)
     return path
 
 
-def _resume_config_view(config: dict) -> dict:
-    # These fields identify where/how a resume is invoked, not the trajectory.
+def checkpoint_filename(unique_tokens_seen: int) -> str:
+    tokens = int(unique_tokens_seen)
+    if tokens < 0:
+        raise ValueError("unique_tokens_seen must be non-negative")
+    return f"checkpoint_{tokens:012d}.pt"
+
+
+def checkpoint_directory(run_dir: str | Path) -> Path:
+    return Path(run_dir) / "checkpoints"
+
+
+def discover_checkpoint_generations(run_dir: str | Path) -> list[Path]:
+    directory = checkpoint_directory(run_dir)
+    if not directory.exists():
+        return []
+    candidates: list[tuple[int, Path]] = []
+    for path in directory.iterdir():
+        match = _CHECKPOINT_RE.match(path.name)
+        if match and path.is_file():
+            candidates.append((int(match.group(1)), path))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return [path for _, path in candidates]
+
+
+def _read_latest_pointer(run_dir: str | Path) -> dict[str, Any] | None:
+    path = checkpoint_directory(run_dir) / "latest.json"
+    if not path.exists():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def candidate_checkpoint_paths(run_dir: str | Path) -> list[Path]:
+    directory = checkpoint_directory(run_dir)
+    pointer = _read_latest_pointer(run_dir)
+    ordered: list[Path] = []
+    if pointer:
+        for key in ("current", "previous"):
+            name = pointer.get(key)
+            if isinstance(name, str):
+                path = directory / name
+                if path not in ordered:
+                    ordered.append(path)
+    for path in discover_checkpoint_generations(run_dir):
+        if path not in ordered:
+            ordered.append(path)
+    return ordered
+
+
+def _require_payload(payload: dict[str, Any]) -> None:
+    if payload.get("format_version") != FORMAT_VERSION:
+        raise ValueError(
+            f"unsupported experiment checkpoint format; expected v{FORMAT_VERSION}"
+        )
+    required = {
+        "model",
+        "optimizer",
+        "sampler",
+        "train_state",
+        "rng",
+        "experiment_config",
+        "data_manifest_sha256",
+        "source_provenance",
+        "checkpoint_metadata",
+    }
+    missing = sorted(required - set(payload))
+    if missing:
+        raise ValueError(f"checkpoint missing required fields: {missing}")
+    # Construction validates the complete clean-break counter schema.
+    TrainState(**payload["train_state"])
+
+
+def inspect_checkpoint(path: str | Path) -> dict[str, Any]:
+    payload = torch.load(Path(path), map_location="cpu", weights_only=False)
+    _require_payload(payload)
+    state = TrainState(**payload["train_state"])
+    return {
+        "format_version": FORMAT_VERSION,
+        "train_state": asdict(state),
+        "experiment_config": payload["experiment_config"],
+        "data_manifest_sha256": payload["data_manifest_sha256"],
+        "source_provenance": payload["source_provenance"],
+        "checkpoint_metadata": payload["checkpoint_metadata"],
+    }
+
+
+def save_checkpoint_generation(
+    run_dir: str | Path,
+    *,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    sampler_state: dict,
+    train_state: TrainState,
+    experiment_config: dict,
+    data_manifest_sha256: str,
+    pass_scheduler_state: dict[str, Any] | None = None,
+    source_provenance: dict[str, Any] | None = None,
+    checkpoint_metadata: dict[str, Any] | None = None,
+    keep_last: int = 2,
+) -> Path:
+    """Commit one resumable generation without risking the previous generation."""
+    if int(keep_last) < 2:
+        raise ValueError("generation checkpointing requires keep_last>=2")
+    directory = checkpoint_directory(run_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / checkpoint_filename(train_state.unique_tokens_seen)
+    payload = _checkpoint_payload(
+        model=model,
+        optimizer=optimizer,
+        sampler_state=sampler_state,
+        train_state=train_state,
+        experiment_config=experiment_config,
+        data_manifest_sha256=data_manifest_sha256,
+        pass_scheduler_state=pass_scheduler_state,
+        source_provenance=source_provenance,
+        checkpoint_metadata=checkpoint_metadata,
+    )
+    _save_payload_durable(path, payload)
+
+    # Verify the new generation before advertising it as current.
+    metadata = inspect_checkpoint(path)
+    if int(metadata["train_state"]["unique_tokens_seen"]) != train_state.unique_tokens_seen:
+        raise RuntimeError("checkpoint verification returned the wrong token count")
+
+    generations = discover_checkpoint_generations(run_dir)
+    previous = next((candidate.name for candidate in generations if candidate != path), None)
+    pointer = {
+        "format_version": 1,
+        "current": path.name,
+        "previous": previous,
+        "unique_tokens_seen": int(train_state.unique_tokens_seen),
+        "model_positions_seen": int(train_state.model_positions_seen),
+        "optimizer_steps": int(train_state.optimizer_steps),
+    }
+    _durable_replace_bytes(
+        directory / "latest.json",
+        (json.dumps(pointer, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+    )
+
+    # Prune only after the new payload and pointer are durable.
+    for candidate in generations[int(keep_last) :]:
+        try:
+            candidate.unlink()
+        except FileNotFoundError:
+            pass
+    _fsync_directory(directory)
+    return path
+
+
+def _resume_config_view(config: dict[str, Any]) -> dict[str, Any]:
     ignored = {
-        # Local paths are relocatable; the manifest and strict model-state
-        # checks provide the actual data/model identity guarantees.
         "model_dir",
         "data_dir",
         "output_dir",
@@ -100,40 +298,64 @@ def _resume_config_view(config: dict) -> dict:
         "eval_batches",
         "eval_passes",
         "checkpoint_every_tokens",
-        *_LEGACY_NON_TRAJECTORY_FIELDS,
+        "checkpoint_every_seconds",
+        "checkpoint_keep_last",
+        "snapshot_at_tokens",
     }
     schedule = config.get("lr_schedule")
     schedule_type = "cosine" if schedule is None else str(schedule.get("type", "cosine"))
-    # Constant-LR runs can safely change their stopping budget. Cosine and
-    # piecewise schedules use max_unique_tokens as their LR horizon, so changing
-    # it would alter the resumed trajectory and is rejected.
     if schedule_type == "constant":
         ignored.add("max_unique_tokens")
-    result = {
-        key: value for key, value in config.items() if key not in ignored
-    }
-    for key, default in _DEFAULT_EXPERIMENT_FIELDS.items():
-        result.setdefault(key, default)
-    # Current non-sparse ExperimentConfig instances leave sparse-only fields
-    # unset so sparse runs cannot inherit an experimental cadence. Normalize
-    # those fields back to their neutral values for resume comparison, while
-    # retaining the historical C=8 defaults for old sparse checkpoint records.
-    if result.get("variant") not in {"sparse_memory_tape", "memory_add_sparse_tape"}:
-        result["memory_write_mode"] = None
-        result["memory_write_stride"] = None
-    return result
+    return {key: value for key, value in config.items() if key not in ignored}
+
+
+def _source_identity(source: dict[str, Any] | None) -> tuple[Any, Any]:
+    if not source:
+        return (None, None)
+    return (source.get("source_code_sha256"), source.get("uv_lock_sha256"))
+
+
+def _validate_payload(
+    payload: dict[str, Any],
+    *,
+    expected_manifest_sha256: str,
+    expected_experiment_config: dict[str, Any] | None,
+    expected_source_provenance: dict[str, Any] | None,
+    allow_source_mismatch: bool,
+    pass_scheduler=None,
+) -> None:
+    _require_payload(payload)
+    if payload["data_manifest_sha256"] != expected_manifest_sha256:
+        raise ValueError("data manifest changed across resume")
+    if expected_experiment_config is not None:
+        recorded = _resume_config_view(payload["experiment_config"])
+        requested = _resume_config_view(expected_experiment_config)
+        changed = sorted(
+            key for key in set(recorded) | set(requested)
+            if recorded.get(key) != requested.get(key)
+        )
+        if changed:
+            raise ValueError(f"experiment config changed across resume: {changed}")
+    if expected_source_provenance is not None and not allow_source_mismatch:
+        if _source_identity(payload["source_provenance"]) != _source_identity(expected_source_provenance):
+            raise ValueError("execution-code or uv.lock hash changed across resume")
+    if pass_scheduler is not None:
+        scheduler_state = payload.get("pass_scheduler")
+        if scheduler_state is None:
+            raise ValueError("checkpoint is missing pass scheduler state")
+        recorded_stages = scheduler_state.get("stages")
+        if recorded_stages is not None and recorded_stages != pass_scheduler.stages:
+            raise ValueError("pass schedule changed across resume")
 
 
 def load_model_weights(path: str | Path, *, model: torch.nn.Module) -> dict[str, Any]:
-    """Load model parameters only from an experiment checkpoint for ``init_from``."""
     payload = torch.load(Path(path), map_location="cpu", weights_only=False)
-    if payload.get("format_version") not in {1, 2}:
-        raise ValueError("unsupported experiment checkpoint format")
+    _require_payload(payload)
     model.load_state_dict(payload["model"], strict=True)
     return {
         "source_path": str(path),
-        "source_train_state": payload.get("train_state"),
-        "source_experiment_config": payload.get("experiment_config"),
+        "source_train_state": payload["train_state"],
+        "source_experiment_config": payload["experiment_config"],
     }
 
 
@@ -143,44 +365,58 @@ def load_checkpoint(
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
     expected_manifest_sha256: str,
-    expected_experiment_config: dict | None = None,
+    expected_experiment_config: dict[str, Any] | None = None,
+    expected_source_provenance: dict[str, Any] | None = None,
+    allow_source_mismatch: bool = False,
     pass_scheduler=None,
 ) -> tuple[TrainState, dict]:
     payload = torch.load(Path(path), map_location="cpu", weights_only=False)
-    version = payload.get("format_version")
-    if version not in {1, 2}:
-        raise ValueError("unsupported experiment checkpoint format")
-    if payload["data_manifest_sha256"] != expected_manifest_sha256:
-        raise ValueError("data manifest changed across resume")
-    if expected_experiment_config is not None:
-        recorded = _resume_config_view(payload["experiment_config"])
-        requested = _resume_config_view(expected_experiment_config)
-        if version == 1:
-            # Bootstrap checkpoints predate the newly added multipass fields.
-            # Compare every trajectory field they actually recorded while
-            # allowing new default-only fields to be absent. Pass-scheduler
-            # compatibility is checked separately below.
-            changed = sorted(
-                key for key, value in recorded.items()
-                if requested.get(key) != value
-            )
-        else:
-            changed = sorted(
-                key for key in set(recorded) | set(requested)
-                if recorded.get(key) != requested.get(key)
-            )
-        if changed:
-            raise ValueError(f"experiment config changed across resume: {changed}")
+    _validate_payload(
+        payload,
+        expected_manifest_sha256=expected_manifest_sha256,
+        expected_experiment_config=expected_experiment_config,
+        expected_source_provenance=expected_source_provenance,
+        allow_source_mismatch=allow_source_mismatch,
+        pass_scheduler=pass_scheduler,
+    )
     model.load_state_dict(payload["model"], strict=True)
     optimizer.load_state_dict(payload["optimizer"])
     if pass_scheduler is not None:
-        scheduler_state = payload.get("pass_scheduler")
-        if scheduler_state is None:
-            # Version-1 vanilla checkpoints predate pass scheduling. They are
-            # compatible only with the implicit fixed one-pass schedule.
-            if pass_scheduler.stages != [{"until_tokens": None, "probabilities": {1: 1.0}}]:
-                raise ValueError("checkpoint predates pass scheduler and is not compatible with this schedule")
-        else:
-            pass_scheduler.load_state_dict(scheduler_state)
+        pass_scheduler.load_state_dict(payload["pass_scheduler"])
     restore_rng_state(payload["rng"])
     return TrainState(**payload["train_state"]), payload["sampler"]
+
+
+def load_latest_valid_checkpoint(
+    run_dir: str | Path,
+    *,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    expected_manifest_sha256: str,
+    expected_experiment_config: dict[str, Any] | None = None,
+    expected_source_provenance: dict[str, Any] | None = None,
+    allow_source_mismatch: bool = False,
+    pass_scheduler=None,
+) -> tuple[Path, TrainState, dict, bool]:
+    """Load current generation, falling back to the previous valid one."""
+    candidates = candidate_checkpoint_paths(run_dir)
+    if not candidates:
+        raise FileNotFoundError("no checkpoint generations found")
+    errors: list[str] = []
+    for index, path in enumerate(candidates):
+        try:
+            state, sampler = load_checkpoint(
+                path,
+                model=model,
+                optimizer=optimizer,
+                expected_manifest_sha256=expected_manifest_sha256,
+                expected_experiment_config=expected_experiment_config,
+                expected_source_provenance=expected_source_provenance,
+                allow_source_mismatch=allow_source_mismatch,
+                pass_scheduler=pass_scheduler,
+            )
+        except Exception as exc:
+            errors.append(f"{path.name}: {type(exc).__name__}: {exc}")
+            continue
+        return path, state, sampler, index > 0
+    raise RuntimeError("no valid checkpoint generation: " + "; ".join(errors))

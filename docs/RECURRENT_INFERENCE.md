@@ -1,58 +1,83 @@
-# K-general incremental and recurrent inference
+# Exact incremental and collapsed recurrent inference
 
-This document defines the cached inference contract for `memory_add`,
-`memory_tape32`, `sparse_memory_tape`, and `memory_add_sparse_tape`. The
-implementation is intentionally independent of the current K=2 training protocol: prompt refinement depth is an inference-time
-hyperparameter `K >= 1`.
+This document defines cached inference for `memory_add`, `tape`, and
+`tape_add_hybrid`. Prompt refinement depth K is an inference-time parameter and
+need not equal the K used during training.
 
-## Two modes
+## Exact incremental K
 
-### Exact incremental K
+`exact_incremental` keeps K independent TinyMistral self-attention KV streams.
+Stream 1 is the first-pass stream. Stream `k>1` consumes strict-past feedback
+from stream `k-1` using the architecture-specific MemoryAdd/tape rule.
 
-`exact_incremental` maintains K independent TinyMistral self-attention KV
-streams. Stream 1 is ordinary vanilla TinyMistral. For MemoryAdd, stream
-`k > 1` consumes
+The central invariant is **snapshot before update**. At physical position t,
+every higher stream reads the lower-stream feedback state that existed before t.
+New `h_t` states are appended to feedback memories only after all K streams
+finish the position. This prevents same-position recurrence leakage.
+
+The implementation is tested against full-prefix `compute_passes(...,
+passes=K)` recomputation for multiple K values and all tape write/visibility
+modes.
+
+## Collapsed recurrent K
+
+`recurrent` performs the same exact K-pass prompt prefill, then retains only the
+final-pass self-attention cache and, for K>1, the feedback state from pass K-1.
+The first processed continuation position therefore sees exactly the same
+feedback and final-stream history as exact K-pass inference. After that position,
+the live final stream writes its own new feedback and closes the recurrent loop.
+
+K=1 is the vanilla cached boundary: recurrent feedback is disabled.
+
+## Tape state
+
+Cached tape feedback is a fixed-capacity chronological `TapeState` with at most
+`memory_window` records and an explicit validity mask. Decode obeys:
 
 ```text
-x_t^k = e_t + W_M RMSNorm(h_(t-1)^(k-1)).
+read old tape -> compute token hidden -> optionally append writer(hidden)
 ```
 
-For MemoryTape32, stream `k > 1` reads the retained strict-past tail from stream
-`k-1`, up to `memory_window` top-layer states. Each appended token costs K
-backbone token steps, but no prefix is recomputed.
+so the current position cannot read its own write. When the tape is full, a
+triggered append evicts the oldest record.
 
-The key causality invariant is **snapshot before update**. All stream-k
-computations at position `t` read the stream-(k-1) feedback memory that existed
-before position `t`. Newly computed `h_t` states are appended only after all K
-streams finish the token. This prevents same-position leakage.
+Dense writes every ordinary position. Periodic writes use the absolute physical
+position and configured stride. Memory-token mode writes only when the observed
+input token is ID V.
 
-The exact cached path is an oracle implementation: on CPU/reference attention,
-its final-token hidden states and logits are tested against full-prefix
-`compute_passes(..., passes=K)` recomputation for K in `{1,2,3,4}`, including
-sequences longer than the self-attention sliding window.
+## Memory-token decode
 
-### Collapsed recurrent K
+MEM is a physical control position, not a predicted language token. Consuming a
+MEM position therefore keeps `next_token_logits` from the preceding ordinary
+position. The intended free-running schedule is:
 
-`recurrent` uses the same K-pass prompt prefill, then retains only:
+```text
+ordinary hidden predicts next linguistic token B
+if a MEM slot is due: process MEM internally and write its tape state
+process already selected B
+B hidden predicts the next linguistic token
+```
 
-- the final pass-K TinyMistral KV cache; and
-- for K>1, feedback memory from pass K-1.
+The low-level API consumes explicit observed physical tokens; public
+`MultiPassVariant.generate()` remains the ordinary backbone generator rather
+than silently inserting control positions.
 
-For MemoryAdd the feedback memory is one `[B,1,D]` top-layer state. For
-MemoryTape32 it is an oldest-to-newest ring of at most `memory_window` states.
+In `write_only` mode every self-attention layer cache carries a boolean
+`key_valid` mask. A MEM K/V entry remains in the cache at its physical/RoPE
+position but has validity false, so later cached queries cannot self-attend to
+it.
 
-This makes the first processed continuation token exact: it sees the same
-pass-(K-1) feedback source and pass-K history as exact incremental inference.
-After that token, the newly produced pass-K state is written into the feedback
-memory and the model closes its own recurrent loop. The approximation therefore
-begins only on the subsequent feedback transition.
+## TapeAddHybrid MEM rule
 
-K=1 is a strict boundary case. Feedback is disabled, so both exact and recurrent
-modes reduce to ordinary cached vanilla TinyMistral.
+For `A <MEM> B`, the fast MemoryAdd state is the last ordinary state. The MEM
+step reads that fast state and writes its own slow tape record, but does not
+replace the fast state. B therefore receives the same fast source h_A and only
+then advances the fast state to h_B.
 
-## Public API
+This rule is identical between full-sequence multipass alignment and cached
+recurrent updates.
 
-The low-level API is explicit and does not alter ordinary model calls:
+## API
 
 ```python
 from tiny_mistral_mptt.inference import prefill, decode_step
@@ -64,98 +89,21 @@ state = prefill(model, input_ids, passes=K, mode="recurrent")
 state = decode_step(model, state, observed_token)
 ```
 
-Dedicated helpers `prefill_exact`, `prefill_recurrent`, `exact_decode_step`, and
-`recurrent_decode_step` are also exported. State objects are immutable
-containers; decode steps return new state objects rather than mutating prior
-state metadata or memory tensors.
+Dedicated `prefill_exact`, `prefill_recurrent`, `exact_decode_step`, and
+`recurrent_decode_step` helpers are also exported. State objects are immutable;
+decode returns a new state.
 
-Public `MultiPassVariant.generate()` remains the vanilla generator on purpose.
-Free-running recurrent sampling should be added only after teacher-forced drift
-has been measured and the explicit inference path is trusted on the target
-hardware.
+## Required gates
 
-MemoryAdd, MemoryTape32, SparseMemoryTape, and MemoryAddSparseTape explicitly
-opt into cached feedback. FBT currently supports only the K=1 vanilla cached
-boundary; requesting K>1 through the cached inference API raises a clear
-capability error.
+Before interpreting recurrent quality:
 
-## Teacher-forced evaluator
-
-`scripts/evaluate_recurrent_inference.py` compares three modes on the same
-held-out suffix:
-
-1. exact incremental K;
-2. collapsed recurrent K;
-3. pass-1/vanilla cached inference from the same checkpoint.
-
-Example:
-
-```bash
-uv run python scripts/evaluate_recurrent_inference.py \
-  --config <experiment-config.yaml> \
-  --checkpoint <checkpoint.pt> \
-  --prefill-passes 1 2 3 4 8 \
-  --prompt-tokens 256 \
-  --continuation-tokens 256 \
-  --horizons 1 2 4 8 16 32 64 128 256 \
-  --output /tmp/recurrent_inference.json
-```
-
-`--prefill-passes` accepts one or more positive K values. It is deliberately not
-stored in the training `ExperimentConfig`: the checkpoint describes how weights
-were trained, while prefill depth describes how those weights are exercised at
-inference.
-
-For each K the JSON output includes cumulative NLL at requested horizons,
-per-offset NLL, recurrent-minus-exact and recurrent-minus-vanilla gaps, and
-final-hidden RMS/cosine drift after each processed suffix token.
-
-For a 256-token prompt and 256-token suffix, `prefill_passes` may be swept
-independently of training K. Training depth and inference depth are separate
-experimental variables; the experiment record must state both.
-
-## MemoryTape32 cached reader
-
-Full finite-pass MemoryTape32 uses `strict_past_local_attention`, where query and
-previous-pass memory sequences are aligned and the local strict-past mask is
-constructed explicitly. Cached decoding instead supplies a memory bank that is
-already known to be strictly earlier than the one-token query. The dedicated
-`memory_bank_attention` primitive therefore performs GQA attention directly
-against that bank without adding a same-position key.
-
-The recurrent ring is capped at `memory_window`; the initial ring is the tail of
-pass K-1 and, one token at a time, old prompt states are replaced by newly
-produced recurrent states.
-
-## Validation gates
-
-Before interpreting recurrent NLL, the following must remain green:
-
-- exact incremental equals full finite-pass recomputation for multiple K;
-- K=1 exact and recurrent modes equal vanilla cached inference;
-- K>1 recurrent prefill logits equal exact prefill logits;
-- the first processed recurrent token equals the exact-K token step;
-- MemoryAdd retains exactly one feedback vector;
-- MemoryTape32 retains an ordered ring no longer than its memory window;
-- SparseMemoryTape retains at most `memory_window` committed records and honors
-  per-example write triggers;
-- the hybrid updates its fast hidden every token but changes its tape only on a
-  write event;
-- no same-position source state is exposed during exact K-stream updates;
-- cached absolute positions remain correct beyond the TinyMistral SWA window;
-- CPU/reference tests pass and the checked-in MPS smoke tests pass on Apple
-  hardware.
-
-## Sparse tape and hybrid cached state
-
-SparseMemoryTape uses a fixed-capacity `SparseTapeState(memories, valid)` during
-cached inference. `valid` makes empty/padded slots explicit, including
-per-example token-triggered write histories. Every decode transition snapshots
-the old bank, computes the token from that strict-past bank, and only then
-appends a new writer output when the current token/position triggers a write.
-
-`MemoryAddSparseTape` carries `HybridFeedbackState(fast_hidden, tape)`. The fast
-hidden is replaced after every token; the sparse tape follows the same
-conditional append rule. Exact K-stream inference still snapshots every lower
-stream before same-position updates, and recurrent collapse seeds the final
-stream from pass K-1 exactly as for the existing dense models.
+- exact cached K-pass must match full-prefix recomputation;
+- K=1 must reduce to ordinary cached TinyMistral;
+- the first collapsed recurrent transition must match exact K-pass;
+- tape state must remain bounded and strict-past;
+- write-only MEM validity must survive KV caching without changing physical
+  positions;
+- TapeAddHybrid must preserve fast state across MEM and advance it on ordinary
+  tokens;
+- cached absolute positions must remain correct beyond the self-attention
+  sliding window.

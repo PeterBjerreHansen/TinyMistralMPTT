@@ -10,9 +10,23 @@ defaults:
   batch_size: 1
   grad_accum_steps: 1
 cases:
-  - {variant: vanilla, passes: 1, autocast_dtype: null}
-  - {variant: vanilla, passes: 1, autocast_dtype: bfloat16}
-  - {variant: memory_add, passes: 2, autocast_dtype: null}
-  - {variant: memory_add, passes: 2, autocast_dtype: bfloat16}
-  - {variant: memory_tape32, passes: 3, autocast_dtype: null}
-  - {variant: memory_tape32, passes: 3, autocast_dtype: bfloat16}
+- variant: vanilla
+  passes: 1
+  autocast_dtype: null
+- variant: vanilla
+  passes: 1
+  autocast_dtype: bfloat16
+- variant: memory_add
+  passes: 2
+  autocast_dtype: null
+- variant: memory_add
+  passes: 2
+  autocast_dtype: bfloat16
+- variant: tape
+  passes: 3
+  autocast_dtype: null
+  memory_write_mode: dense
+- variant: tape
+  passes: 3
+  autocast_dtype: bfloat16
+  memory_write_mode: dense

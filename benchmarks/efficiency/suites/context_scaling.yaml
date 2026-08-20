@@ -10,23 +10,71 @@ defaults:
   batch_size: 1
   grad_accum_steps: 1
 cases:
-  - {variant: vanilla, passes: 1, sequence_length: 512}
-  - {variant: vanilla, passes: 1, sequence_length: 2048}
-  - {variant: vanilla, passes: 1, sequence_length: 4096}
-  - {variant: vanilla, passes: 1, sequence_length: 8192}
-  - {variant: memory_add, passes: 2, sequence_length: 512}
-  - {variant: memory_add, passes: 2, sequence_length: 2048}
-  - {variant: memory_add, passes: 2, sequence_length: 4096}
-  - {variant: memory_add, passes: 2, sequence_length: 8192}
-  - {variant: memory_add, passes: 3, sequence_length: 512}
-  - {variant: memory_add, passes: 3, sequence_length: 2048}
-  - {variant: memory_add, passes: 3, sequence_length: 4096}
-  - {variant: memory_add, passes: 3, sequence_length: 8192}
-  - {variant: memory_tape32, passes: 2, sequence_length: 512}
-  - {variant: memory_tape32, passes: 2, sequence_length: 2048}
-  - {variant: memory_tape32, passes: 2, sequence_length: 4096}
-  - {variant: memory_tape32, passes: 2, sequence_length: 8192}
-  - {variant: memory_tape32, passes: 3, sequence_length: 512}
-  - {variant: memory_tape32, passes: 3, sequence_length: 2048}
-  - {variant: memory_tape32, passes: 3, sequence_length: 4096}
-  - {variant: memory_tape32, passes: 3, sequence_length: 8192}
+- variant: vanilla
+  passes: 1
+  sequence_length: 512
+- variant: vanilla
+  passes: 1
+  sequence_length: 2048
+- variant: vanilla
+  passes: 1
+  sequence_length: 4096
+- variant: vanilla
+  passes: 1
+  sequence_length: 8192
+- variant: memory_add
+  passes: 2
+  sequence_length: 512
+- variant: memory_add
+  passes: 2
+  sequence_length: 2048
+- variant: memory_add
+  passes: 2
+  sequence_length: 4096
+- variant: memory_add
+  passes: 2
+  sequence_length: 8192
+- variant: memory_add
+  passes: 3
+  sequence_length: 512
+- variant: memory_add
+  passes: 3
+  sequence_length: 2048
+- variant: memory_add
+  passes: 3
+  sequence_length: 4096
+- variant: memory_add
+  passes: 3
+  sequence_length: 8192
+- variant: tape
+  passes: 2
+  sequence_length: 512
+  memory_write_mode: dense
+- variant: tape
+  passes: 2
+  sequence_length: 2048
+  memory_write_mode: dense
+- variant: tape
+  passes: 2
+  sequence_length: 4096
+  memory_write_mode: dense
+- variant: tape
+  passes: 2
+  sequence_length: 8192
+  memory_write_mode: dense
+- variant: tape
+  passes: 3
+  sequence_length: 512
+  memory_write_mode: dense
+- variant: tape
+  passes: 3
+  sequence_length: 2048
+  memory_write_mode: dense
+- variant: tape
+  passes: 3
+  sequence_length: 4096
+  memory_write_mode: dense
+- variant: tape
+  passes: 3
+  sequence_length: 8192
+  memory_write_mode: dense

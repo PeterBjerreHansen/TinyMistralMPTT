@@ -1,73 +1,73 @@
 # Dolmino data artifact
 
-The training runner does **not** live-stream remote data. A one-time preparation
-step converts a small, pinned slice of `allenai/dolmino-mix-1124` into an exact
-local token artifact. Every later architecture will therefore see the same token
-IDs in the same block order.
+Training does not live-stream remote data. A one-time materialization converts a
+pinned slice of `allenai/dolmino-mix-1124` into deterministic local token blocks.
+Every architecture therefore starts from the same linguistic IDs and block
+order.
 
-The versioned preparation recipes live beside their artifacts:
+Checked-in preparation recipes live beside their local generated artifacts:
 
 ```text
 data/dolmino/local_2048/config.yaml
 data/dolmino/gpu_2048/config.yaml
 ```
 
-The generated token files and manifest remain local data and are ignored by Git.
-
-## Published 50B recipe
-
-The upstream percentages are rounded and sum to 100.01%, so the materializer
-normalizes them before largest-remainder block allocation.
-
-| Source config | Published mix % |
-| --- | ---: |
-| `dclm` | 47.20 |
-| `flan` | 16.60 |
-| `pes2o` | 5.85 |
-| `wiki` | 7.11 |
-| `stackexchange` | 2.45 |
-| `math` | 20.80 |
-
-A block belongs to exactly one source. At sequence length `T`, the requested
-source token yield is therefore exact to one `T`-token block. At realistic
-budgets the rounding error is negligible and is recorded in `manifest.json`.
+Generated binaries and manifests remain local/ignored.
 
 ## Split construction
 
-For every source, one deterministic shuffled streaming iterator is created.
-Validation documents are consumed first; their final partially used document is
-discarded. Training then starts from the next document. This prevents a source
-document from being shared between the local validation and training artifacts.
+For each source, validation documents are consumed first from a deterministic
+shuffled streaming iterator; the final partially used validation document is
+discarded. Training then continues from the next document. Thus train and
+validation are source-document-disjoint **within one materialized artifact**.
 
-Documents are tokenized with the pinned TinyMistral `tokenizer.json`. A BOS token
-is inserted as an explicit separator before every source document. Blocks are
-fixed length, unpadded, and carry no attention mask so the vanilla MPS/CUDA fast
-attention paths remain eligible.
+Documents are tokenized with the pinned TinyMistral tokenizer, with BOS used as
+an explicit document separator. Packed blocks are fixed-length and unpadded.
 
 ## On-disk format
 
 ```text
 artifact/
-  train.bin                 uint16 [num_train_blocks, sequence_length]
-  train.sources.bin         uint8  [num_train_blocks]
-  validation.bin            uint16 [num_validation_blocks, sequence_length]
-  validation.sources.bin    uint8  [num_validation_blocks]
+  train.bin
+  train.sources.bin
+  validation.bin
+  validation.sources.bin
   manifest.json
 ```
 
-TinyMistral's 32,005-token vocabulary fits in `uint16`. The manifest contains
-source allocations, tokenizer hash, requested/resolved dataset revisions,
-recipe name, streaming shuffle buffer, preparation seed, and SHA-256 hashes of
-every binary artifact. Dependency versions are subsequently frozen by the
-project `uv.lock` generated on the machine that first resolves the online
-dependencies.
+The binary token IDs are ordinary vocabulary IDs only. The manifest records the
+vocabulary size, source allocation, tokenizer hash, requested/resolved dataset
+revision, recipe, shuffle settings, seed, and file hashes.
+
+## Memory-token data view
+
+Explicit `<MEM>` positions are **not** written into the stored Dolmino artifact
+and do not require tokenizer mutation. `MemoryTokenPackedDataset` wraps the
+ordinary artifact at load time and inserts control ID V, where V is the base
+vocabulary size.
+
+For N linguistic tokens and cadence C:
+
+```text
+physical positions = N + floor((N - 1) / C)
+```
+
+No trailing MEM is inserted after the final linguistic token because there is no
+following linguistic token inside that block. Ordinary token order and source ID
+are unchanged.
+
+This means the standard `gpu_2048` / `local_2048` backing block remains 2048
+**linguistic** tokens. At C=8 the tape model processes 2303 physical positions.
+That extra compute is intentional and separately accounted; it avoids silently
+reducing the text/data dose for MEM experiments.
+
+The model's maximum position range must be large enough for the expanded block;
+training preflight checks this.
 
 ## Core-run split ownership
 
-The document-disjoint validation guarantee is defined within one materialized
-artifact. For a locked core campaign, Phase-A initialization and Phase-B
-training should therefore use the same pinned core artifact as the reported
-validation set (currently `data/dolmino/gpu_2048`). Development wiring may keep
-using `local_2048`, but its checkpoint is not the parent of a locked core run.
-This avoids relying on cross-artifact shuffle behavior to argue that serious
-training and validation are disjoint.
+The document-disjoint guarantee belongs to one materialized artifact. A locked
+core Phase-A initialization and Phase-B run should therefore use the same pinned
+core artifact as the reported validation set. Development wiring may use
+`local_2048`, but its checkpoint should not become the parent of a locked core
+run solely because it is convenient.

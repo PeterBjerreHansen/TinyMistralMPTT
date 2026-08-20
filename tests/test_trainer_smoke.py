@@ -10,6 +10,7 @@ from tiny_mistral_mptt.data.packed_dataset import PackedTokenDataset
 from tiny_mistral_mptt.data.prepare import PreparationRequest, materialize_from_document_iterators
 from tiny_mistral_mptt.data.recipes import DOLMINO_50B_SOURCES
 from tiny_mistral_mptt.training.trainer import Trainer
+from tiny_mistral_mptt.training.checkpoint import candidate_checkpoint_paths
 from tiny_mistral_mptt.variants.vanilla import VanillaVariant
 
 
@@ -67,15 +68,19 @@ def test_end_to_end_vanilla_trainer_and_resume(tmp_path):
     first = Trainer(model=make_model(), config=first_cfg, train_data=train, validation_data=val, device=torch.device("cpu"))
     state1 = first.train(until_unique_tokens=32)
     assert state1.unique_tokens_seen == 32
-    checkpoint = tmp_path / "run1" / "latest.pt"
+    checkpoint = candidate_checkpoint_paths(tmp_path / "run1")[0]
     assert checkpoint.exists()
     run_info = json.loads((tmp_path / "run1" / "run.json").read_text())
     assert run_info["batching"] == {
-        "sequence_length": 8,
+        "linguistic_sequence_length": 8,
+        "physical_sequence_length": 8,
         "microbatch_size": 2,
         "grad_accum_steps": 1,
         "microbatch_tokens": 16,
+        "microbatch_model_positions": 16,
+        "control_positions_per_microbatch": 0,
         "nominal_optimizer_batch_tokens": 16,
+        "nominal_optimizer_batch_model_positions": 16,
         "planned_optimizer_steps": 4,
     }
     source = run_info["source"]
@@ -167,7 +172,7 @@ def test_interrupted_resume_matches_uninterrupted_parameters(tmp_path):
         validation_data=val,
         device=torch.device("cpu"),
     ).train(until_unique_tokens=32)
-    checkpoint = tmp_path / "interrupted" / "latest.pt"
+    checkpoint = candidate_checkpoint_paths(tmp_path / "interrupted")[0]
 
     resumed_model = make_model()
     resumed_cfg = ExperimentConfig.from_dict({

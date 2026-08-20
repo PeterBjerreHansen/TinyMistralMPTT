@@ -11,6 +11,7 @@ from tiny_mistral_mptt.data.packed_dataset import PackedTokenDataset
 from tiny_mistral_mptt.data.prepare import PreparationRequest, materialize_from_document_iterators
 from tiny_mistral_mptt.data.recipes import DOLMINO_50B_SOURCES
 from tiny_mistral_mptt.training.trainer import Trainer
+from tiny_mistral_mptt.training.checkpoint import candidate_checkpoint_paths
 from tiny_mistral_mptt.variants.fbt import FBTVariant
 
 
@@ -135,7 +136,7 @@ def test_init_from_loads_model_only_into_fresh_phase_b_run(tmp_path):
         validation_data=val,
         device=torch.device("cpu"),
     ).train()
-    checkpoint = tmp_path / "a" / "latest.pt"
+    checkpoint = candidate_checkpoint_paths(tmp_path / "a")[0]
     expected = torch.load(checkpoint, map_location="cpu", weights_only=False)["model"]
 
     phase_b_cfg = ExperimentConfig(
@@ -219,7 +220,7 @@ def test_mixed_pass_schedule_resume_is_bit_exact(tmp_path):
         validation_data=val,
         device=torch.device("cpu"),
     ).train(until_unique_tokens=32)
-    checkpoint = tmp_path / "interrupted" / "latest.pt"
+    checkpoint = candidate_checkpoint_paths(tmp_path / "interrupted")[0]
 
     resumed = make_fbt(seed=77)
     resumed_cfg = ExperimentConfig.from_dict(
@@ -301,21 +302,24 @@ def test_mixed_pass_schedule_forwards_k_specific_weights(tmp_path, monkeypatch):
     assert all(weights == expected[passes] for passes, weights in observed)
 
 
-def test_memory_tape_phase_a_runs_through_shared_trainer(tmp_path):
-    from tiny_mistral_mptt.variants.memory_tape32 import MemoryTape32Variant
+def test_tape_phase_a_runs_through_shared_trainer(tmp_path):
+    from tiny_mistral_mptt.variants.tape import TapeVariant
 
     data_dir = tmp_path / "data-memory"
     make_artifact(data_dir)
     train = PackedTokenDataset(data_dir, "train")
     val = PackedTokenDataset(data_dir, "validation")
     torch.manual_seed(23)
-    model = MemoryTape32Variant(
+    model = TapeVariant(
         MistralForCausalLM(micro_config(), attention_backend="reference"),
         memory_window=4,
+        memory_write_mode="dense",
+        memory_write_stride=1,
         initialization_seed=31,
     )
     cfg = ExperimentConfig(
-        variant="memory_tape32",
+        variant="tape",
+        memory_write_mode="dense",
         phase="A",
         model_dir="unused",
         data_dir=str(data_dir),

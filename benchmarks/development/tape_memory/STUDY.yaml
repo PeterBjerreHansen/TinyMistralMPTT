@@ -1,0 +1,8 @@
+name: tape_memory
+status: planned
+question: >
+  How much write sparsity can a learned tape tolerate, and does an explicit
+  input-only <MEM> computation improve storage relative to periodic writes
+  before adding the MemoryAdd fast recurrent channel?
+arms: []
+comparisons: []

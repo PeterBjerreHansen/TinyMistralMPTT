@@ -8,7 +8,7 @@ import torch
 from tiny_mistral.device import resolve_device
 from tiny_mistral_mptt.config import load_experiment_config
 from tiny_mistral_mptt.data.manifest import file_sha256
-from tiny_mistral_mptt.data.packed_dataset import PackedTokenDataset
+from tiny_mistral_mptt.data.packed_dataset import load_packed_dataset_for_experiment
 from tiny_mistral_mptt.evaluation.nll import evaluate_nll
 from tiny_mistral_mptt.model_factory import load_variant_from_config
 
@@ -16,7 +16,7 @@ from tiny_mistral_mptt.model_factory import load_variant_from_config
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
-    parser.add_argument("--checkpoint", default=None, help="experiment latest.pt; omit for base TinyMistral")
+    parser.add_argument("--checkpoint", default=None, help="experiment checkpoint generation; omit for base TinyMistral")
     parser.add_argument("--max-blocks", type=int, default=None)
     args = parser.parse_args()
     cfg = load_experiment_config(args.config)
@@ -28,7 +28,7 @@ def main() -> None:
         if payload.get("data_manifest_sha256") != expected:
             raise RuntimeError("checkpoint was trained against a different data manifest")
         model.load_state_dict(payload["model"], strict=True)
-    dataset = PackedTokenDataset(cfg.data_dir, "validation")
+    dataset = load_packed_dataset_for_experiment(cfg.data_dir, "validation", memory_write_mode=cfg.memory_write_mode, memory_write_stride=cfg.memory_write_stride)
     result = evaluate_nll(model, dataset, device=device, max_blocks=args.max_blocks)
     print(json.dumps(result.__dict__, indent=2, sort_keys=True))
 

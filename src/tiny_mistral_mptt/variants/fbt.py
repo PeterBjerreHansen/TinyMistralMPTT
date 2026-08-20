@@ -45,11 +45,6 @@ class FBTVariant(MultiPassVariant):
         yield from self.feedback_value.parameters()
         yield from self.feedback_gate.parameters()
 
-    @staticmethod
-    def shift_previous(previous_hidden: torch.Tensor) -> torch.Tensor:
-        """Backward-compatible FBT alias for the shared causal shift helper."""
-        return shift_previous_hidden(previous_hidden)
-
     def feedback_inputs(
         self,
         token_embeddings: torch.Tensor,

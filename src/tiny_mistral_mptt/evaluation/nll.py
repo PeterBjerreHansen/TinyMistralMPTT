@@ -8,6 +8,7 @@ import torch
 import torch.nn.functional as F
 
 from ..data.packed_dataset import PackedTokenDataset
+from ..variants.multipass import MultiPassVariant
 
 
 @dataclass(frozen=True)
@@ -41,16 +42,21 @@ def evaluate_nll(
     try:
         for index in range(limit):
             ids = dataset.batch([index], device=device)
-            output = model(ids, use_cache=False)
-            logits = output.logits[:, :-1, :].float()
-            targets = ids[:, 1:]
+            if isinstance(model, MultiPassVariant):
+                logits = model.compute_passes(ids, passes=1, phase="B").final.logits.float()
+            else:
+                output = model(ids, use_cache=False)
+                logits = output.logits.float()
+            labels = model.build_lm_labels(ids)
+            valid = labels.ne(-100)
             losses = F.cross_entropy(
                 logits.reshape(-1, logits.shape[-1]),
-                targets.reshape(-1),
+                labels.to(logits.device).reshape(-1),
+                ignore_index=-100,
                 reduction="sum",
             )
             value = float(losses.detach().cpu())
-            count = int(targets.numel())
+            count = int(valid.sum().item())
             total_nll += value
             total_tokens += count
             source_id = dataset.source_id(index)

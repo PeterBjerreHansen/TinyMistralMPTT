@@ -82,6 +82,18 @@ def reference_attention(
     )
     scores = scores.masked_fill(~allowed[:, None, :, :], torch.finfo(scores.dtype).min)
     probs = F.softmax(scores, dim=-1, dtype=torch.float32).to(query.dtype)
+    # A write-only control key can make a causal row genuinely empty (for
+    # example a leading control slot). Mask and renormalize explicitly so an
+    # empty row is exact zero rather than a uniform distribution over masked
+    # values caused by softmax(finfo.min, ...).
+    valid = allowed[:, None, :, :].to(probs.dtype)
+    probs = probs * valid
+    denom = probs.sum(dim=-1, keepdim=True)
+    probs = torch.where(
+        denom > 0,
+        probs / denom.clamp_min(torch.finfo(probs.dtype).tiny),
+        torch.zeros_like(probs),
+    )
     if dropout_p:
         probs = F.dropout(probs, p=dropout_p, training=training)
     return torch.matmul(probs, value)

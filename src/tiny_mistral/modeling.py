@@ -22,6 +22,12 @@ class LayerKVCache:
     key: torch.Tensor  # [B, Hkv, S, D], already RoPE-rotated
     value: torch.Tensor  # [B, Hkv, S, D]
     start_pos: int
+    key_valid: torch.Tensor | None = None  # optional bool [B,S]
+
+    def __post_init__(self) -> None:
+        if self.key_valid is not None:
+            if self.key_valid.dtype != torch.bool or self.key_valid.shape != (self.key.shape[0], self.key.shape[-2]):
+                raise ValueError("LayerKVCache.key_valid must be bool [B,S]")
 
     @property
     def seq_len(self) -> int:
@@ -179,10 +185,6 @@ class MistralAttention(nn.Module):
             can_fast = (
                 past_key_value is None
                 and hidden_states.shape[1] == position_ids.shape[1]
-                and (
-                    attention_mask is None
-                    or bool(torch.all(attention_mask.to(torch.bool)).item())
-                )
             )
             if can_fast:
                 expected = torch.arange(
@@ -253,13 +255,28 @@ class MistralAttention(nn.Module):
             )[None, :].expand(bsz, -1)
             key_positions = torch.cat((old_positions, position_ids), dim=-1)
 
-        key_padding_mask = None
+        # `attention_mask` marks whether the *current* sequence positions may
+        # be exposed as self-attention K/V entries.  Cached validity is carried
+        # explicitly so write-only control tokens remain hidden on later decode
+        # steps without disturbing their absolute position or KV-cache length.
         if attention_mask is not None:
             if attention_mask.ndim != 2 or attention_mask.shape[0] != bsz:
                 raise ValueError("attention_mask must have shape [B, T]")
-            if attention_mask.shape[1] < all_key_states.shape[-2]:
-                raise ValueError("attention_mask is shorter than current KV sequence")
-            key_padding_mask = attention_mask[:, -all_key_states.shape[-2] :].to(torch.bool)
+            if attention_mask.shape[1] < q_len:
+                raise ValueError("attention_mask is shorter than current query sequence")
+            current_valid = attention_mask[:, -q_len:].to(torch.bool)
+        else:
+            current_valid = torch.ones((bsz, q_len), dtype=torch.bool, device=hidden_states.device)
+        if past_key_value is None:
+            key_padding_mask = current_valid
+        else:
+            if past_key_value.key_valid is None:
+                past_valid = torch.ones(
+                    (bsz, past_key_value.seq_len), dtype=torch.bool, device=hidden_states.device
+                )
+            else:
+                past_valid = past_key_value.key_valid.to(device=hidden_states.device)
+            key_padding_mask = torch.cat((past_valid, current_valid), dim=1)
 
         backend = self._resolve_backend(
             hidden_states,
@@ -274,6 +291,7 @@ class MistralAttention(nn.Module):
                 all_key_states,
                 all_value_states,
                 sliding_window=self.config.sliding_window,
+                key_padding_mask=key_padding_mask,
                 compile_kernel=self.compile_flex,
                 block_size=self.flex_block_size,
             )
@@ -283,6 +301,7 @@ class MistralAttention(nn.Module):
                 all_key_states,
                 all_value_states,
                 sliding_window=self.config.sliding_window,
+                key_padding_mask=key_padding_mask,
                 dropout_p=self.attention_dropout,
                 training=self.training,
             )
@@ -318,7 +337,8 @@ class MistralAttention(nn.Module):
                 cache_key = all_key_states[:, :, :0, :].detach()
                 cache_value = all_value_states[:, :, :0, :].detach()
                 start_pos = int(position_ids[0, -1].item()) + 1
-            new_cache = LayerKVCache(cache_key, cache_value, start_pos)
+            cache_valid = key_padding_mask[:, -keep:].detach() if keep else key_padding_mask[:, :0].detach()
+            new_cache = LayerKVCache(cache_key, cache_value, start_pos, cache_valid)
 
         return attn_output, new_cache
 
@@ -425,7 +445,6 @@ class MistralModel(nn.Module):
         bsz, seq_len, _ = inputs_embeds.shape
         fast_attention_compatible = (
             past_key_values is None
-            and attention_mask is None
             and position_ids is None
         )
         if use_cache is None:

@@ -11,7 +11,6 @@ from tiny_mistral_mptt.inference import (
 )
 from tiny_mistral_mptt.variants.fbt import FBTVariant
 from tiny_mistral_mptt.variants.memory_add import MemoryAddVariant
-from tiny_mistral_mptt.variants.memory_tape32 import MemoryTape32Variant
 
 
 def make_variant(name: str):
@@ -25,12 +24,6 @@ def make_variant(name: str):
         with torch.no_grad():
             dim = model.config.hidden_size
             model.memory_projection.weight.copy_(0.05 * torch.eye(dim))
-    elif name == "memory_tape32":
-        model = MemoryTape32Variant(
-            backbone,
-            memory_window=3,
-            initialization_seed=987,
-        )
     else:
         raise AssertionError(name)
     return model.eval()
@@ -56,7 +49,7 @@ def test_cached_feedback_capability_is_explicit_for_fbt():
         prefill_exact(model, prompt, passes=2)
 
 
-@pytest.mark.parametrize("variant_name", ["memory_add", "memory_tape32"])
+@pytest.mark.parametrize("variant_name", ["memory_add"])
 @pytest.mark.parametrize("passes", [1, 2, 3, 4])
 def test_exact_incremental_matches_full_recomputation_for_arbitrary_k(
     variant_name, passes
@@ -105,7 +98,7 @@ def test_exact_incremental_matches_full_recomputation_for_arbitrary_k(
                     assert layer_cache.seq_len <= model.config.sliding_window - 1
 
 
-@pytest.mark.parametrize("variant_name", ["memory_add", "memory_tape32"])
+@pytest.mark.parametrize("variant_name", ["memory_add"])
 @pytest.mark.parametrize("passes", [2, 3, 4])
 def test_recurrent_handoff_is_exact_for_first_processed_token(
     variant_name, passes
@@ -149,7 +142,7 @@ def test_recurrent_handoff_is_exact_for_first_processed_token(
         assert recurrent_after.next_position == exact_after.next_position == 7
 
 
-@pytest.mark.parametrize("variant_name", ["memory_add", "memory_tape32"])
+@pytest.mark.parametrize("variant_name", ["memory_add"])
 def test_k1_recurrent_and_exact_are_vanilla_cached_inference(variant_name):
     model = make_variant(variant_name)
     ids = sample_ids()
@@ -192,40 +185,6 @@ def test_k1_recurrent_and_exact_are_vanilla_cached_inference(variant_name):
             torch.testing.assert_close(
                 recurrent.next_token_logits, vanilla_logits, atol=0, rtol=0
             )
-
-
-def test_memory_tape_recurrent_ring_is_bounded_ordered_and_seeded_from_k_minus_1():
-    model = make_variant("memory_tape32")
-    ids = sample_ids()
-    prompt = ids[:, :7]
-
-    with torch.no_grad():
-        exact = prefill_exact(model, prompt, passes=3)
-        recurrent = prefill_recurrent(model, prompt, passes=3)
-        expected_seed = exact.streams[1].feedback_memory
-        assert expected_seed.shape[1] == model.memory_window
-        torch.testing.assert_close(
-            recurrent.feedback_memory, expected_seed, atol=0, rtol=0
-        )
-
-        old_memory = recurrent.feedback_memory.clone()
-        recurrent_after = recurrent_decode_step(model, recurrent, ids[:, 7:8])
-        assert recurrent.feedback_memory is not None
-        torch.testing.assert_close(recurrent.feedback_memory, old_memory, atol=0, rtol=0)
-        assert recurrent_after.feedback_memory is not None
-        assert recurrent_after.feedback_memory.shape[1] == model.memory_window
-        torch.testing.assert_close(
-            recurrent_after.feedback_memory[:, :-1, :],
-            old_memory[:, 1:, :],
-            atol=0,
-            rtol=0,
-        )
-        torch.testing.assert_close(
-            recurrent_after.feedback_memory[:, -1:, :],
-            recurrent_after.last_hidden,
-            atol=0,
-            rtol=0,
-        )
 
 
 def test_memory_add_recurrent_state_keeps_exactly_one_feedback_vector():

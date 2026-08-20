@@ -78,42 +78,49 @@ def test_unvalidated_autocast_dtype_is_rejected():
 
 
 
-def test_sparse_memory_config_requires_coherent_write_policy():
-    cfg = _config(
-        variant="sparse_memory_tape",
+def test_tape_config_requires_coherent_write_policy():
+    dense = _config(variant="tape", memory_write_mode="dense")
+    assert dense.memory_write_mode == "dense"
+    assert dense.memory_write_stride is None
+    assert dense.memory_token_visibility is None
+
+    periodic = _config(
+        variant="tape",
         memory_write_mode="periodic",
         memory_write_stride=4,
     )
-    assert cfg.memory_write_stride == 4
+    assert periodic.memory_write_stride == 4
 
-    cfg = _config(
-        variant="memory_add_sparse_tape",
-        memory_write_mode="token",
+    mem = _config(
+        variant="tape_add_hybrid",
+        memory_write_mode="memory_token",
         memory_write_stride=8,
-        memory_token_id=7,
+        memory_token_visibility="visible",
     )
-    assert cfg.memory_token_id == 7
+    assert mem.memory_write_mode == "memory_token"
+    assert mem.memory_token_visibility == "visible"
 
-    with pytest.raises(ValueError, match="explicitly set memory_write_mode"):
-        _config(variant="sparse_memory_tape")
-    with pytest.raises(ValueError, match="explicitly set memory_write_stride"):
-        _config(variant="sparse_memory_tape", memory_write_mode="periodic")
-
-    with pytest.raises(ValueError, match="requires memory_token_id"):
+    with pytest.raises(ValueError, match="require memory_write_mode"):
+        _config(variant="tape")
+    with pytest.raises(ValueError, match="requires positive memory_write_stride"):
+        _config(variant="tape", memory_write_mode="periodic")
+    with pytest.raises(ValueError, match="requires memory_token_visibility"):
         _config(
-            variant="sparse_memory_tape",
-            memory_write_mode="token",
+            variant="tape",
+            memory_write_mode="memory_token",
             memory_write_stride=8,
         )
-    with pytest.raises(ValueError, match="must not set memory_token_id"):
+    with pytest.raises(ValueError, match="must not set memory_write_stride"):
+        _config(variant="tape", memory_write_mode="dense", memory_write_stride=1)
+    with pytest.raises(ValueError, match="applies only"):
         _config(
-            variant="sparse_memory_tape",
+            variant="tape",
             memory_write_mode="periodic",
             memory_write_stride=8,
-            memory_token_id=7,
+            memory_token_visibility="write_only",
         )
 
 
-def test_sparse_write_fields_cannot_silently_change_other_variants():
-    with pytest.raises(ValueError, match=r"memory_write_\* fields"):
+def test_tape_fields_cannot_silently_change_other_variants():
+    with pytest.raises(ValueError, match="supported only for tape variants"):
         _config(variant="memory_add", memory_write_stride=4)

@@ -1,164 +1,118 @@
 # Training contract
 
-This document defines reusable trainer semantics. It deliberately does not say
-which Stage 2 protocol is currently preferred; those decisions live under
-`benchmarks/development/` and, once locked, under `benchmarks/core/`.
+This document defines reusable trainer semantics. Scientific protocol decisions
+belong under `benchmarks/development/` and, once locked, under
+`benchmarks/core/`.
 
-## Research stages versus trainer phases
+## Research stages and trainer phases
 
-The project has two research stages:
+The trainer has two mechanics:
 
-- **Stage 1:** construct/select viable architecture-specific starting points.
-- **Stage 2:** develop and then lock the training protocol for the comparison.
+- **Phase A:** pretrained TinyMistral parameters are frozen; only
+  architecture-added parameters train.
+- **Phase B:** the full model is differentiable, with separate pretrained and
+  added-parameter optimizer groups.
 
-The trainer independently has two mechanics:
-
-- **Phase A:** pretrained TinyMistral parameters are frozen; only added
-  architecture parameters train.
-- **Phase B:** the full model is differentiable, with independent pretrained and
-  added-parameter learning rates.
-
-A Stage 1 experiment normally uses Phase A. Stage 2 normally uses Phase B, but
-the names are intentionally not interchangeable.
+Phase names describe optimization mechanics, not research-stage names.
 
 ## Pass objective
 
-Given pass losses `L_1 ... L_K`, configured non-negative loss weights are
-right-aligned to the sampled pass count and normalized to sum to one:
+For pass losses `L_1 ... L_K`, configured non-negative loss weights are
+right-aligned to K and normalized:
 
 ```text
 L = sum_k w_k L_k
 ```
 
-Examples:
+`pass_schedule` independently controls the sampled pass count. Its RNG/state is
+checkpointed, so fixed or mixed K schedules resume exactly.
 
-```yaml
-pass_loss_weights: [0.0, 1.0]
-pass_loss_weights: [0.25, 0.75]
-pass_loss_weights: [0.05, 0.20, 0.75]
-```
+## Parameter groups and schedules
 
-`null` means uniform weighting.
+Phase B maintains separate AdamW groups for pretrained and architecture-added
+parameters. Each group has its own base learning rate. A common schedule
+multiplier is supplied by `constant`, `cosine`, or `piecewise_linear` schedule
+logic.
 
-## Pass-count schedule
+## `init_from`, `resume_from`, and auto-resume
 
-Pass count and loss weighting are separate controls. `pass_schedule` is a
-stateful token-indexed schedule whose stages define a probability distribution
-over positive K values:
+`init_from` loads model weights only and starts a new optimizer/data/RNG
+trajectory. `resume_from` restores the same trajectory: model, optimizer,
+sampler, pass scheduler, RNG, counters, phase, and compatible config.
 
-```yaml
-pass_schedule:
-  - probabilities:
-      2: 1.0
-```
+For spot/cloud operation, `scripts/train.py --resume-auto` starts fresh only
+when the run directory is empty; otherwise it resumes the newest valid durable
+checkpoint generation. Ambiguous existing state fails closed. See `CLOUD.md`.
 
-or, if a future experiment explicitly requires a mixture:
+## Batching and token budgets
 
-```yaml
-pass_schedule:
-  - probabilities:
-      1: 0.50
-      2: 0.45
-      3: 0.05
-```
-
-The scheduler has an independent RNG and checkpointed state. Fixed-K training
-is therefore a protocol choice, not an implementation limit.
-
-## Parameter groups and learning-rate schedules
-
-Phase B maintains separate optimizer groups for pretrained and architecture-
-added parameters. Each group has its own base LR; the configured LR schedule
-supplies a common multiplier. Supported schedules are `constant`, `cosine`, and
-`piecewise_linear`.
-
-## `init_from` versus `resume_from`
-
-These operations have intentionally different scientific meanings.
-
-### `init_from`
-
-Loads model parameters only. Optimizer state, sampler state, pass-scheduler
-state, RNG streams, and counters start fresh. Use this when starting a new
-experimental stage or arm from a selected checkpoint.
-
-### `resume_from`
-
-Restores the exact training trajectory: model, optimizer, sampler, pass
-scheduler, RNG state, counters, phase, and compatible experiment config. Use it
-only to continue the same run.
-
-A development checkpoint should never become a main-run parent merely because
-it is newest. Main Stage 2 ancestry is defined by the locked core study and the
-selected Stage 1 checkpoint provenance recorded by the run. For the serious
-CUDA campaign, rerun any Phase-A wiring initialization against the same pinned
-core data artifact used by Phase B (currently `data/dolmino/gpu_2048`) rather
-than using a `local_2048` development checkpoint. This keeps the serious
-training and held-out validation partition under one artifact's documented
-split guarantee.
-
-## Batching semantics
-
-Microbatch size and optimizer-batch size are separate controls. At sequence
-length `T`:
+Microbatch size and optimizer-batch size remain distinct. For ordinary packed
+data with L linguistic tokens per block:
 
 ```text
-microbatch_tokens = batch_size * T
-nominal_optimizer_batch_tokens = batch_size * grad_accum_steps * T
+linguistic tokens / microbatch = batch_size * L
+linguistic tokens / nominal optimizer update = batch_size * grad_accum_steps * L
 ```
 
-The 2048-context development evidence used `batch_size=1` and
-`grad_accum_steps=1`, hence 2,048 unique tokens per optimizer update. A larger
-CUDA microbatch is an engineering opportunity, but if accumulation remains 1 it
-also changes the scientific optimizer-batch size and therefore the number of
-optimizer updates per token. Do not silently compensate by adding accumulation.
+A larger hardware microbatch can therefore change the scientific optimizer
+batch when accumulation is unchanged. It must not be treated as a harmless
+hardware default.
 
-The trainer divides each microbatch loss by the realized accumulation count,
-then clips gradients and performs one optimizer step. A final partial
-accumulation is allowed so exact token budgets do not require a full nominal
-optimizer batch. `run.json` records the nominal batching contract and every
-training record reports the actual optimizer-batch tokens used by that update.
+The trainer consumes whole packed blocks. An exact linguistic-token budget must
+be divisible by `batch_size * linguistic_tokens_per_block`; the final optimizer
+update may use fewer accumulation microsteps, but blocks are never cropped.
 
-## Token accounting
+## Memory-token accounting
 
-For a microbatch with N token IDs and K backbone passes:
+The backing dataset contains only linguistic tokens. In
+`memory_write_mode: memory_token`, a deterministic view inserts physical MEM
+positions. A backing block of N linguistic tokens and cadence C becomes
 
 ```text
-unique_tokens_seen += N
-token_equivalent_compute += N * K
+P = N + floor((N - 1) / C)
 ```
 
-Both should be reported when comparing different pass depths.
+physical positions. Thus the trainer records separate counters:
 
-## Evaluation during training
-
-Small periodic validation slices are health diagnostics, not headline results.
-Full held-out evaluations should be run from preserved checkpoints. During a
-locked main run, diagnostics are read-only: they describe the trajectory and do
-not trigger architecture-specific LR or objective changes except for genuine
-engineering failure.
-
-
-## Sparse-memory architecture knobs
-
-The sparse-memory branch adds three config fields. They are architecture
-settings, not selected hyperparameters, and sparse experiment configs must set
-them explicitly:
-
-```yaml
-memory_window: 32          # number of addressable committed records
-memory_write_mode: periodic
-memory_write_stride: 8     # candidate cadence C, not a selected default
+```text
+unique_tokens_seen       += linguistic tokens
+model_positions_seen     += physical positions
+token_equivalent_compute += physical positions * effective passes
 ```
 
-Token-triggered mode instead sets `memory_write_mode: token` and a
-`memory_token_id`. The model implementation supports that timing contract, but
-current Dolmino recipes do not insert a new memory token. Do not run a real
-token-triggered study until the tokenizer/data/loss treatment is explicitly
-defined.
+`max_unique_tokens`, pass scheduling, and LR scheduling use linguistic tokens.
+Training metrics additionally report linguistic tokens/s and model positions/s.
+This keeps data dose comparable while making the extra MEM computation visible.
 
-For periodic mode, a write at position `t` is committed only after that token's
-computation, so it becomes readable from `t+1`. `memory_window` always counts
-records rather than source-token distance. The nominal tape span is `C * W`
-source positions; it is not a bound on the information contained in each deep
-state.
+## Memory-token loss
+
+MEM uses input ID V, where V is the base vocabulary size, but the LM head remains
+V classes. The tape model constructs position-aligned labels over linguistic
+tokens. For:
+
+```text
+physical: A  <MEM>  B  C
+labels:   B  IGNORE C  IGNORE
+```
+
+A predicts B; MEM predicts nothing. See `TAPE_MEMORY.md` for the full contract.
+
+## Phase A and MEM
+
+Dense/periodic tape Phase A can discard the frozen pass-1 graph because no added
+parameter occurs in pass 1. Memory-token Phase A cannot: the added MEM embedding
+participates in pass 1 and must receive gradient through later recurrent/tape
+loss. The backbone remains frozen, but pass-1 autograd stays enabled for that
+mode.
+
+## Checkpoint cadence and validation
+
+Serious cloud runs may checkpoint on either a linguistic-token cadence or a
+wall-clock cadence. New trained state is checkpointed before expensive periodic
+validation, so an interruption during validation does not lose the preceding
+optimizer work. Validation is read-only and should not implicitly alter the
+training protocol.
+
+Optional `snapshot_at_tokens` writes weights-only safetensors for scientific
+analysis. Snapshots never drive resume; resumable generation checkpoints remain
+the trajectory source of truth.

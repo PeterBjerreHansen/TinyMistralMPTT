@@ -7,7 +7,7 @@ import torch
 
 from tiny_mistral.modeling import LayerKVCache, MistralForCausalLM
 
-from ..training.loss import causal_lm_loss, normalize_pass_weights
+from ..training.loss import causal_lm_loss_from_labels, normalize_pass_weights
 from .base import ExperimentalVariant, TrainOutput
 
 
@@ -44,9 +44,11 @@ def shift_previous_hidden(previous_hidden: torch.Tensor) -> torch.Tensor:
 class MultiPassVariant(ExperimentalVariant):
     """Shared pass recurrence and objective plumbing for research variants.
 
-    Architectures only define how pass ``k>1`` consumes the previous pass's
-    final top-layer states. The one-pass path is always the validated vanilla
-    TinyMistral backbone.
+    Architectures define how pass ``k>1`` consumes the previous pass's final
+    top-layer states. Ordinary-token variants use the validated vanilla
+    TinyMistral input path on pass 1. Architectures with input-only control
+    positions may additionally supply control embeddings and self-attention key
+    masks while retaining the same pretrained backbone weights.
     """
 
     supports_cached_feedback = False
@@ -62,15 +64,57 @@ class MultiPassVariant(ExperimentalVariant):
     def get_input_embeddings(self):
         return self.backbone.get_input_embeddings()
 
+    def input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """Embed model-input IDs, including architecture control IDs when present."""
+        return self.backbone.model.embed_tokens(input_ids)
+
+    def self_attention_key_mask(self, input_ids: torch.Tensor) -> torch.Tensor | None:
+        """Optional bool [B,T] mask controlling which positions persist as self-attention K/V."""
+        return None
+
+    def build_lm_labels(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """Return position-aligned LM labels; -100 marks non-prediction positions."""
+        if input_ids.ndim != 2:
+            raise ValueError("input_ids must be [B,T]")
+        labels = torch.full_like(input_ids, -100)
+        if input_ids.shape[1] > 1:
+            labels[:, :-1] = input_ids[:, 1:]
+        return labels
+
+    def lm_loss(self, logits: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
+        return causal_lm_loss_from_labels(logits, self.build_lm_labels(input_ids))
+
+    def control_token_mask(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """Bool [B,T] positions that are architectural controls, not language."""
+        return torch.zeros_like(input_ids, dtype=torch.bool)
+
+    def prediction_hidden_after_sequence(
+        self, hidden_states: torch.Tensor, input_ids: torch.Tensor
+    ) -> torch.Tensor:
+        """Hidden state whose logits predict the next linguistic token."""
+        if hidden_states.shape[:2] != input_ids.shape:
+            raise ValueError("hidden_states/input_ids token shapes differ")
+        return hidden_states[:, -1:, :]
+
+    def phase_a_first_pass_requires_grad(self) -> bool:
+        """Whether an added parameter participates inside pass 1 in Phase A."""
+        return False
+
     def _run_first_hidden(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.backbone.model(
-            input_ids=input_ids, use_cache=False
+            inputs_embeds=self.input_embeddings(input_ids),
+            attention_mask=self.self_attention_key_mask(input_ids),
+            use_cache=False,
         ).last_hidden_state
 
     def _run_first_hidden_cached(
         self, input_ids: torch.Tensor
     ) -> tuple[torch.Tensor, tuple[LayerKVCache, ...]]:
-        output = self.backbone.model(input_ids=input_ids, use_cache=True)
+        output = self.backbone.model(
+            inputs_embeds=self.input_embeddings(input_ids),
+            attention_mask=self.self_attention_key_mask(input_ids),
+            use_cache=True,
+        )
         if output.past_key_values is None:
             raise RuntimeError("cached first pass did not return KV state")
         return output.last_hidden_state, output.past_key_values
@@ -81,7 +125,8 @@ class MultiPassVariant(ExperimentalVariant):
         past_key_values: tuple[LayerKVCache, ...],
     ) -> tuple[torch.Tensor, tuple[LayerKVCache, ...]]:
         output = self.backbone.model(
-            input_ids=input_ids,
+            inputs_embeds=self.input_embeddings(input_ids),
+            attention_mask=self.self_attention_key_mask(input_ids),
             past_key_values=past_key_values,
             use_cache=True,
         )
@@ -111,6 +156,8 @@ class MultiPassVariant(ExperimentalVariant):
         token_embedding: torch.Tensor,
         feedback_memory: torch.Tensor,
         past_key_values: tuple[LayerKVCache, ...],
+        *,
+        token: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, tuple[LayerKVCache, ...]]:
         """Process one token from an already-strict-past feedback memory."""
         raise NotImplementedError
@@ -151,9 +198,12 @@ class MultiPassVariant(ExperimentalVariant):
         if phase == "A" and passes < 2:
             raise ValueError("Phase A requires at least two passes")
 
-        # In Phase A no added parameter participates in pass 1. The backbone is
-        # frozen, so retaining its autograd graph would only waste memory.
-        if phase == "A":
+        # Most Phase-A variants have no added parameter inside pass 1, so its
+        # frozen-backbone graph can be discarded. Memory-token variants are the
+        # deliberate exception: their learned input-only <MEM> embedding is an
+        # added parameter and must receive gradients through the pass-1 state
+        # that is later written/read by the recurrent pathway.
+        if phase == "A" and not self.phase_a_first_pass_requires_grad():
             with torch.no_grad():
                 first_hidden = self._run_first_hidden(input_ids)
         else:
@@ -163,7 +213,7 @@ class MultiPassVariant(ExperimentalVariant):
         if passes == 1:
             return tuple(hidden_states)
 
-        token_embeddings = self.backbone.model.embed_tokens(input_ids)
+        token_embeddings = self.input_embeddings(input_ids)
         previous = first_hidden
         for _ in range(1, passes):
             previous = self._run_feedback_hidden(input_ids, token_embeddings, previous)
@@ -199,7 +249,7 @@ class MultiPassVariant(ExperimentalVariant):
         pass_losses: list[torch.Tensor] = []
         for hidden in hidden_states:
             logits = self.backbone.lm_head(hidden).float()
-            pass_losses.append(causal_lm_loss(logits, input_ids))
+            pass_losses.append(self.lm_loss(logits, input_ids))
 
         weights = normalize_pass_weights(
             loss_weights,

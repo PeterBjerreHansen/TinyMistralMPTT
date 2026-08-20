@@ -25,6 +25,7 @@ def local_window_attention(
     value: torch.Tensor,
     *,
     sliding_window: int | None,
+    key_padding_mask: torch.Tensor | None = None,
     dropout_p: float = 0.0,
     training: bool = False,
 ) -> torch.Tensor:
@@ -46,6 +47,9 @@ def local_window_attention(
     heads. Queries are grouped as [Hkv, Hq/Hkv].
     """
     _validate_qkv(query, key, value)
+    if key_padding_mask is not None:
+        if key_padding_mask.shape != (query.shape[0], query.shape[-2]) or key_padding_mask.dtype != torch.bool:
+            raise ValueError("key_padding_mask must be bool [B,T]")
     if not 0.0 <= dropout_p < 1.0:
         raise ValueError("dropout_p must be in [0, 1)")
 
@@ -91,10 +95,23 @@ def local_window_attention(
     # for query t corresponds to absolute index t - (W-1-j).
     t = torch.arange(seq_len, device=query.device)
     j = torch.arange(window, device=query.device)
-    valid = (t[:, None] - (window - 1 - j[None, :])) >= 0  # [T, W]
-    scores = scores.masked_fill(~valid[None, None, None, :, :], torch.finfo(scores.dtype).min)
+    causal_valid = (t[:, None] - (window - 1 - j[None, :])) >= 0  # [T,W]
+    if key_padding_mask is None:
+        valid = causal_valid[None, :, :].expand(bsz, -1, -1)
+    else:
+        padded_valid = F.pad(key_padding_mask, (pad_left, 0), value=False)
+        key_valid_windows = padded_valid.unfold(dimension=-1, size=window, step=1)
+        valid = causal_valid[None, :, :] & key_valid_windows
+    scores = scores.masked_fill(~valid[:, None, None, :, :], torch.finfo(scores.dtype).min)
 
     probs = F.softmax(scores, dim=-1, dtype=torch.float32).to(query.dtype)
+    probs = probs * valid[:, None, None, :, :].to(probs.dtype)
+    denom = probs.sum(dim=-1, keepdim=True)
+    probs = torch.where(
+        denom > 0,
+        probs / denom.clamp_min(torch.finfo(probs.dtype).tiny),
+        torch.zeros_like(probs),
+    )
     if dropout_p:
         probs = F.dropout(probs, p=dropout_p, training=training)
 

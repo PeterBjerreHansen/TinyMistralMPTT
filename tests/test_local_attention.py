@@ -113,3 +113,28 @@ def test_local_backend_falls_back_for_padding():
         a, _ = ref(x, attention_mask=mask, position_ids=pos)
         b, _ = local(x, attention_mask=mask, position_ids=pos)
     torch.testing.assert_close(b, a)
+
+
+def test_local_kernel_key_validity_mask_matches_reference_and_all_masked_rows_zero():
+    batch, hq, hkv, seq_len, dim = 2, 4, 2, 9, 8
+    torch.manual_seed(701)
+    q = torch.randn(batch, hq, seq_len, dim)
+    k = torch.randn(batch, hkv, seq_len, dim)
+    v = torch.randn(batch, hkv, seq_len, dim)
+    pos = torch.arange(seq_len)[None, :].expand(batch, -1)
+    valid = torch.tensor([
+        [False, False, True, False, True, True, False, True, True],
+        [True, False, True, True, False, True, True, True, False],
+    ])
+    expected = reference_attention(
+        q, k, v,
+        query_positions=pos,
+        key_positions=pos,
+        sliding_window=4,
+        key_padding_mask=valid,
+    )
+    actual = local_window_attention(q, k, v, sliding_window=4, key_padding_mask=valid)
+    assert torch.isfinite(actual).all()
+    torch.testing.assert_close(actual, expected, atol=2e-6, rtol=2e-5)
+    # Batch row 0, query position 0 has no valid causal key at all.
+    torch.testing.assert_close(actual[0, :, 0], torch.zeros_like(actual[0, :, 0]), atol=0, rtol=0)

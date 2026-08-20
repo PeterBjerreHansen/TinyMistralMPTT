@@ -1,0 +1,42 @@
+name: tape_write_scaling_2048
+defaults:
+  device: auto
+  model_dir: checkpoints/TinyMistral-248M-v3
+  parameter_dtype: float32
+  autocast_dtype: bfloat16
+  attention_backend: auto
+  warmup_steps: 1
+  measure_steps: 3
+  sequence_length: 2048
+  batch_size: 1
+  grad_accum_steps: 1
+  passes: 2
+  memory_window: 32
+cases:
+- variant: tape
+  memory_window: 32
+  memory_write_mode: dense
+- variant: tape
+  memory_window: 32
+  memory_write_mode: periodic
+  memory_write_stride: 1
+- variant: tape
+  memory_window: 32
+  memory_write_mode: periodic
+  memory_write_stride: 4
+- variant: tape
+  memory_window: 32
+  memory_write_mode: periodic
+  memory_write_stride: 8
+- variant: tape
+  memory_window: 32
+  memory_write_mode: periodic
+  memory_write_stride: 16
+- variant: tape
+  memory_window: 32
+  memory_write_mode: periodic
+  memory_write_stride: 32
+- variant: tape_add_hybrid
+  memory_window: 32
+  memory_write_mode: periodic
+  memory_write_stride: 8

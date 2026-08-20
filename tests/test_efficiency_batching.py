@@ -26,10 +26,10 @@ def test_recommend_cuda_microbatch_uses_smallest_common_efficient_batch():
             _row("memory_add", 2, 180.0),
             _row("memory_add", 4, 200.0),
             _row("memory_add", 8, 205.0),
-            _row("memory_tape32", 1, 80.0),
-            _row("memory_tape32", 2, 150.0),
-            _row("memory_tape32", 4, 155.0),
-            _row("memory_tape32", 8, 0.0, status="oom"),
+            _row("tape", 1, 80.0),
+            _row("tape", 2, 150.0),
+            _row("tape", 4, 155.0),
+            _row("tape", 8, 0.0, status="oom"),
         ]
     }
     result = recommend_cuda_microbatch(document, efficiency_fraction=0.90)
@@ -40,7 +40,7 @@ def test_recommend_cuda_microbatch_uses_smallest_common_efficient_batch():
     assert result.changes_optimizer_batch is True
     assert result.local_grad_accum_steps_to_match is None
     assert result.throughput_fraction_by_variant["memory_add"] == pytest.approx(200 / 205)
-    assert result.throughput_fraction_by_variant["memory_tape32"] == pytest.approx(1.0)
+    assert result.throughput_fraction_by_variant["tape"] == pytest.approx(1.0)
 
 
 def test_recommendation_reports_accumulation_when_reference_batch_is_larger():
@@ -48,8 +48,8 @@ def test_recommendation_reports_accumulation_when_reference_batch_is_larger():
         "results": [
             _row("memory_add", 1, 100.0),
             _row("memory_add", 2, 100.0),
-            _row("memory_tape32", 1, 100.0),
-            _row("memory_tape32", 2, 100.0),
+            _row("tape", 1, 100.0),
+            _row("tape", 2, 100.0),
         ]
     }
     result = recommend_cuda_microbatch(
@@ -64,13 +64,13 @@ def test_recommendation_reports_accumulation_when_reference_batch_is_larger():
 
 def test_recommend_cuda_microbatch_rejects_missing_variant_rows():
     document = {"results": [_row("memory_add", 1, 100.0)]}
-    with pytest.raises(ValueError, match="memory_tape32"):
+    with pytest.raises(ValueError, match="tape"):
         recommend_cuda_microbatch(document)
 
 
 def test_recommend_cuda_microbatch_ignores_accumulated_rows():
-    row = _row("memory_tape32", 1, 100.0)
+    row = _row("tape", 1, 100.0)
     row["grad_accum_steps"] = 2
     document = {"results": [_row("memory_add", 1, 100.0), row]}
-    with pytest.raises(ValueError, match="memory_tape32"):
+    with pytest.raises(ValueError, match="tape"):
         recommend_cuda_microbatch(document)

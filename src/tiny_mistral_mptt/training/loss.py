@@ -13,14 +13,7 @@ def normalize_pass_weights(
     device: torch.device,
     dtype: torch.dtype,
 ) -> torch.Tensor:
-    """Return right-aligned non-negative pass weights normalized to sum to one.
-
-    A configured vector may be longer than the number of passes sampled for a
-    batch. In that case its last ``passes`` entries are used. If it is shorter,
-    leading zeroes are inserted. This preserves the older MPTT repository's
-    useful convention that later-pass emphasis survives mixed pass-count
-    schedules without architecture-specific objective code.
-    """
+    """Return right-aligned non-negative pass weights normalized to sum to one."""
     if passes < 1:
         raise ValueError("passes must be positive")
     if weights is None:
@@ -44,14 +37,37 @@ def normalize_pass_weights(
     return result / total
 
 
+def causal_lm_loss_from_labels(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    *,
+    ignore_index: int = -100,
+) -> torch.Tensor:
+    """Cross-entropy for position-aligned labels.
+
+    Unlike ordinary shifted language-model loss, this form can represent
+    architecture control slots: positions with ``ignore_index`` predict
+    nothing, while an earlier linguistic position may target the next
+    linguistic token across one or more control slots.
+    """
+    if logits.ndim != 3 or labels.ndim != 2 or logits.shape[:2] != labels.shape:
+        raise ValueError("logits [B,T,V] and labels [B,T] must align")
+    valid = labels.ne(ignore_index)
+    if not bool(valid.any()):
+        raise ValueError("LM labels contain no prediction targets")
+    return F.cross_entropy(
+        logits.reshape(-1, logits.shape[-1]),
+        labels.to(logits.device).reshape(-1),
+        ignore_index=ignore_index,
+    )
+
+
 def causal_lm_loss(logits: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
+    """Ordinary one-position-shift next-token loss."""
     if logits.ndim != 3 or input_ids.ndim != 2 or logits.shape[:2] != input_ids.shape:
         raise ValueError("logits [B,T,V] and input_ids [B,T] must align")
     if input_ids.shape[1] < 2:
         raise ValueError("causal LM loss requires at least two tokens")
-    shift_logits = logits[:, :-1, :].contiguous()
-    shift_labels = input_ids[:, 1:].contiguous().to(logits.device)
-    return F.cross_entropy(
-        shift_logits.view(-1, shift_logits.shape[-1]),
-        shift_labels.view(-1),
-    )
+    labels = torch.full_like(input_ids, -100)
+    labels[:, :-1] = input_ids[:, 1:]
+    return causal_lm_loss_from_labels(logits, labels)

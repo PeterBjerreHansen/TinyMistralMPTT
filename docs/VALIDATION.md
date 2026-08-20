@@ -1,114 +1,90 @@
 # Validation gates
 
-This file records durable correctness gates for the codebase. Experimental
-results and protocol decisions live under `benchmarks/`; reusable diagnostics
-remain executable from `scripts/` rather than becoming benchmark studies by
-default.
+Correctness gates are part of the research protocol. Experimental conclusions
+belong under `benchmarks/`; this file describes reusable invariants that must
+remain green.
 
 ## Vanilla substrate
 
-The validated backbone targets `M4-ai/TinyMistral-248M-v3`. Provenance and the
-single documented non-numerical dispatch hardening are recorded in
+The vendored backbone targets `M4-ai/TinyMistral-248M-v3`. Provenance is in
 `UPSTREAMS.md`; `VANILLA_SOURCE.sha256` guards the vendored source.
 
-The substrate tests cover model loading, reference/local attention parity,
-sliding-window masks, cached decoding, generation, device handling, and source
-manifest integrity.
+Tape work adds one documented substrate capability: an optional boolean
+self-attention K/V-validity mask. Ordinary runs use all-valid keys and must retain
+vanilla numerical behavior. Reference, local O(TW), and FlexAttention masks are
+tested for parity, including an all-masked query row returning exact zero rather
+than NaN/uniform leakage.
 
-## Multipass architecture gates
+## Multipass/tape gates
 
-The suite must continue to enforce:
+The suite must enforce:
 
-- pass 1 of every multipass variant is exact vanilla;
-- MemoryAdd is an all-depth vanilla fixed point at zero initialization;
-- one-state previous-pass feedback is shifted by exactly one token;
-- MemoryTape32 full-sequence reads are strict-past and locally bounded;
-- Phase A freezes pretrained parameters and Phase B restores backbone gradients;
-- pass-loss weights are right-aligned and normalized;
-- pass-count sampling is deterministic and checkpointed;
-- `init_from` loads weights only while `resume_from` restores the exact training
-  trajectory.
+- ordinary pass 1 matches the vanilla backbone path;
+- MemoryAdd remains a vanilla fixed point at zero projection initialization;
+- dense tape and periodic C1 are identical with matching weights;
+- periodic and MEM writes are strict-past;
+- tape window counts records and empty/invalid banks return finite exact-zero
+  attention contributions;
+- Phase A freezes pretrained parameters and trains only added parameters;
+- memory-token Phase A preserves pass-1 autograd for the added MEM embedding;
+- pass weights and pass-count scheduling are deterministic and checkpointable.
 
-## Cached inference gates
+## Explicit MEM loss/attention gates
 
-For MemoryAdd and MemoryTape32:
+For `A <MEM> B`:
 
-- exact K-stream cached inference matches full finite-pass recomputation for
-  multiple K values;
-- K=1 exact and recurrent inference is the vanilla cached boundary;
-- unsupported K>1 cached feedback is rejected explicitly;
-- recurrent K>1 is seeded from pass K-1 and the first processed continuation
-  token matches the exact path;
+- MEM input ID is V while the LM output dimension remains V;
+- A targets B and the MEM position has `ignore_index`;
+- direct LM gradient at MEM's logits is exactly zero;
+- perturbing ignored MEM-position logits cannot change the language loss;
+- the MEM embedding receives nonzero Phase-A gradient through recurrent/tape
+  pathways;
+- `visible` permits a local MEM-to-future self-attention dependency;
+- `write_only` permits MEM to read preceding context but prevents MEM from being
+  used as self-attention K/V;
+- cached write-only key validity preserves the MEM physical position.
+
+## Hybrid gates
+
+For TapeAddHybrid in memory-token mode:
+
+- both MEM and the following ordinary token use the same last-ordinary fast
+  source from the previous stream;
+- MEM can write the tape but cannot advance `fast_hidden`;
+- the following ordinary token advances `fast_hidden`;
+- fast and tape intervention paths remain independently diagnosable.
+
+## Cached/recurrent gates
+
+- exact incremental K-pass equals full-prefix recomputation for multiple K;
 - snapshot-before-update prevents same-position feedback leakage;
-- MemoryAdd retains one feedback vector;
-- MemoryTape32 retains an ordered bounded ring and its cached bank reader accepts
-  exactly one query token;
-- absolute cache positions remain correct beyond the self-attention sliding
-  window.
+- recurrent prefill starts from the exact K-pass boundary;
+- the first recurrent continuation transition equals exact K-pass;
+- tape state remains chronological and bounded;
+- write-only cache validity persists across decode;
+- K=1 remains the vanilla cached boundary.
 
-Pass-depth stability, memory interventions, and exact-vs-recurrent drift are
-validation measurements available for any checkpoint. They should become a
-retained benchmark result only when they support an actual scientific decision.
+## Training/recovery gates
 
-## Benchmark and study gates
+The spot-safe trainer is tested for:
 
-Repository organization follows semantic rather than filename-only invariants:
+- at least two durable checkpoint generations;
+- a new generation being verified before `latest.json` advances;
+- corrupt-newest fallback to the previous generation;
+- incomplete `.tmp` files being ignored;
+- metrics repair back to checkpointed progress;
+- source-code/environment identity checks on resume;
+- interruption/resume of memory-token Tape and TapeAddHybrid producing the same
+  final model/optimizer/sampler/counters as uninterrupted training.
 
-- runnable configs live with the control or study that owns them;
-- development/core studies use `STUDY.yaml` instead of a central config tree;
-- the manifest names the scientific question and comparison axes but does not
-  duplicate execution settings from runnable configs;
-- every runnable config in a study is declared by the manifest;
-- a study arm writes raw run artifacts only beneath its local
-  `results/generated/<arm>/` directory;
-- compared arms must match on every config field except the arm-local output
-  path, declared `experimental_axes`, and any explicitly documented
-  `allowed_differences`;
-- historical reports are lightweight read-only evidence rather than an active
-  runnable surface;
-- current configs may not depend on historical namespaces.
+## Study and hardware gates
 
-`tests/test_experiment_layout.py`, `tests/test_studies.py`, and
-`scripts/verify_study.py` enforce these conventions.
+`make check` runs pytest, byte-compilation, study-manifest verification, and
+`git diff --check` when Git metadata is available. On Apple hardware also run
+`scripts/smoke_mps.py`.
 
-## Standard local gate
-
-```bash
-make check
-```
-
-This runs pytest, byte-compilation, study verification, and `git diff --check`
-when Git metadata is available. On Apple hardware also run:
-
-```bash
-uv run python scripts/smoke_mps.py
-```
-
-## CUDA gate
-
-No CUDA efficiency claim or large optimizer batch is assumed by the repository.
-The 2048-context development reference uses 2,048 unique tokens per optimizer
-update. Before a serious GPU campaign, run the K=2 CUDA batch-qualification
-suite at `grad_accum_steps=1`, record OOM/throughput/peak-memory behavior, and
-select the smallest common efficient MemoryAdd/MemoryTape32 microbatch. A
-selected batch above 1 is a protocol change, not merely a hardware setting, and
-must be qualified before a core study is locked.
-
-The efficiency runner reports microbatch tokens, gradient accumulation,
-optimizer-batch tokens, optimizer-step throughput, unique-token throughput, and
-memory telemetry. The trainer records the same batching semantics in `run.json`
-and per-update metrics. Finally run `scripts/cloud_preflight.py` against the
-exact intended paid-run config.
-
-### Sparse-memory gates
-
-The sparse-memory branch additionally requires:
-
-- C=1 identity-writer equivalence to dense MemoryTape32;
-- strict read-before-write visibility for periodic and token triggers;
-- record-count (not source-token-distance) window semantics;
-- masked empty sparse banks with exact-zero, finite output;
-- Phase-A gradients through writer and readers with a frozen backbone;
-- exact cached/full-prefix agreement for SparseMemoryTape and the hybrid;
-- hybrid decomposition into its MemoryAdd and SparseTape components;
-- bounded sparse cached banks and per-example token-triggered writes.
+Before a serious CUDA campaign, run the K=2 batch qualification with
+`grad_accum_steps=1`. A larger selected microbatch changes optimizer-batch size
+unless accumulation is adjusted and therefore requires scientific qualification.
+For write-only MEM, CUDA FlexAttention/reference parity must remain green before
+paid quality runs.

@@ -4,6 +4,7 @@ from conftest import micro_config
 from tiny_mistral.modeling import MistralForCausalLM
 from tiny_mistral_mptt.training.phases import configure_phase
 from tiny_mistral_mptt.variants.fbt import FBTVariant
+from tiny_mistral_mptt.variants.multipass import shift_previous_hidden
 
 
 def make_variant():
@@ -67,7 +68,7 @@ def test_fbt_prefix_mixin_reverts_a_checkpoint_reproducible_prefix():
     with torch.no_grad():
         variant.feedback_value.weight.copy_(torch.eye(dim))
         variant.feedback_gate.weight.zero_()
-        shifted = variant.shift_previous(previous)
+        shifted = shift_previous_hidden(previous)
         raw = torch.cat(
             (embeddings[:, :1, :], 0.5 * shifted[:, 1:, :]),
             dim=1,

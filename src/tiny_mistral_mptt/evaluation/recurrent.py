@@ -68,13 +68,19 @@ def _normalize_horizons(
     return result
 
 
-def _token_nll(logits: torch.Tensor, target: torch.Tensor) -> float:
+def _token_nll(logits: torch.Tensor, target: torch.Tensor, valid: torch.Tensor | None = None) -> tuple[float, int]:
     if logits.ndim != 2 or target.ndim != 2 or target.shape[1] != 1:
         raise ValueError("logits must be [B,V] and target [B,1]")
     if logits.shape[0] != target.shape[0]:
         raise ValueError("logits and target batch sizes differ")
-    loss = F.cross_entropy(logits.float(), target[:, 0], reduction="sum")
-    return float(loss.detach().cpu())
+    if valid is None:
+        valid = torch.ones(target.shape[0], dtype=torch.bool, device=target.device)
+    if valid.shape != (target.shape[0],):
+        raise ValueError("valid must be bool [B]")
+    if not bool(valid.any()):
+        return 0.0, 0
+    loss = F.cross_entropy(logits[valid].float(), target[valid, 0], reduction="sum")
+    return float(loss.detach().cpu()), int(valid.sum().item())
 
 
 @torch.no_grad()
@@ -113,6 +119,7 @@ def evaluate_recurrent_continuation(
     exact_loss_by_offset = [0.0] * continuation_tokens
     recurrent_loss_by_offset = [0.0] * continuation_tokens
     vanilla_loss_by_offset = [0.0] * continuation_tokens
+    prediction_count_by_offset = [0] * continuation_tokens
     delta_sq_by_step = [0.0] * continuation_tokens
     delta_count_by_step = [0] * continuation_tokens
     cosine_sum_by_step = [0.0] * continuation_tokens
@@ -134,15 +141,14 @@ def evaluate_recurrent_continuation(
 
             for offset in range(continuation_tokens):
                 target = continuation[:, offset : offset + 1]
-                exact_loss_by_offset[offset] += _token_nll(
-                    exact.next_token_logits, target
-                )
-                recurrent_loss_by_offset[offset] += _token_nll(
-                    recurrent.next_token_logits, target
-                )
-                vanilla_loss_by_offset[offset] += _token_nll(
-                    vanilla.next_token_logits, target
-                )
+                valid_target = ~model.control_token_mask(target)[:, 0]
+                exact_loss, count = _token_nll(exact.next_token_logits, target, valid_target)
+                recurrent_loss, _ = _token_nll(recurrent.next_token_logits, target, valid_target)
+                vanilla_loss, _ = _token_nll(vanilla.next_token_logits, target, valid_target)
+                exact_loss_by_offset[offset] += exact_loss
+                recurrent_loss_by_offset[offset] += recurrent_loss
+                vanilla_loss_by_offset[offset] += vanilla_loss
+                prediction_count_by_offset[offset] += count
 
                 # Process the observed target even at the last offset so the
                 # latent drift after every continuation token is measured.
@@ -165,12 +171,15 @@ def evaluate_recurrent_continuation(
     finally:
         model.train(was_training)
 
-    per_offset_count = limit
-    exact_offset = tuple(value / per_offset_count for value in exact_loss_by_offset)
-    recurrent_offset = tuple(
-        value / per_offset_count for value in recurrent_loss_by_offset
-    )
-    vanilla_offset = tuple(value / per_offset_count for value in vanilla_loss_by_offset)
+    def _offset_means(values: list[float]) -> tuple[float, ...]:
+        return tuple(
+            value / count if count else float("nan")
+            for value, count in zip(values, prediction_count_by_offset, strict=True)
+        )
+
+    exact_offset = _offset_means(exact_loss_by_offset)
+    recurrent_offset = _offset_means(recurrent_loss_by_offset)
+    vanilla_offset = _offset_means(vanilla_loss_by_offset)
     hidden_rms = tuple(
         math.sqrt(total / count)
         for total, count in zip(delta_sq_by_step, delta_count_by_step, strict=True)
@@ -184,7 +193,9 @@ def evaluate_recurrent_continuation(
 
     horizon_results: list[RecurrentHorizonResult] = []
     for horizon in report_horizons:
-        count = limit * horizon
+        count = sum(prediction_count_by_offset[:horizon])
+        if count <= 0:
+            raise ValueError("selected horizon contains no linguistic prediction targets")
         exact_nll = sum(exact_loss_by_offset[:horizon]) / count
         recurrent_nll = sum(recurrent_loss_by_offset[:horizon]) / count
         vanilla_nll = sum(vanilla_loss_by_offset[:horizon]) / count
@@ -206,7 +217,7 @@ def evaluate_recurrent_continuation(
         blocks=limit,
         prompt_tokens=prompt_tokens,
         continuation_tokens=continuation_tokens,
-        predicted_tokens_per_mode=limit * continuation_tokens,
+        predicted_tokens_per_mode=sum(prediction_count_by_offset),
         horizons=tuple(horizon_results),
         exact_nll_by_offset=exact_offset,
         recurrent_nll_by_offset=recurrent_offset,

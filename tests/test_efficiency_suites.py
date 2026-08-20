@@ -19,7 +19,7 @@ def test_efficiency_suites_are_explicit_and_non_scientific():
         "precision_mps.yaml",
         "precision_cuda.yaml",
         "cuda_batch_qualification.yaml",
-        "sparse_memory_scaling.yaml",
+        "tape_write_scaling.yaml",
     }
     assert {path.name for path in SUITES.glob("*.yaml")} == expected
     assert (ROOT / "benchmarks" / "efficiency" / "README.md").exists()
@@ -33,13 +33,7 @@ def test_efficiency_suite_cases_have_required_dimensions():
         assert cases
         for case in cases:
             merged = {**defaults, **case}
-            assert merged["variant"] in {
-                "vanilla",
-                "memory_add",
-                "memory_tape32",
-                "sparse_memory_tape",
-                "memory_add_sparse_tape",
-            }
+            assert merged["variant"] in {"vanilla", "memory_add", "tape", "tape_add_hybrid"}
             assert merged["passes"] in {1, 2, 3}
             assert merged["sequence_length"] > 0
             assert merged["batch_size"] > 0
@@ -61,7 +55,7 @@ def test_precision_suites_compare_fp32_and_bfloat16_on_each_backend():
         modes = {case.get("autocast_dtype") for case in raw["cases"]}
         assert modes == {None, "bfloat16"}
         pairs = {(case["variant"], case["passes"]) for case in raw["cases"]}
-        assert pairs == {("vanilla", 1), ("memory_add", 2), ("memory_tape32", 3)}
+        assert pairs == {("vanilla", 1), ("memory_add", 2), ("tape", 3)}
 
 
 def test_cuda_batch_qualification_is_k2_bf16_and_does_not_accumulate():
@@ -72,9 +66,9 @@ def test_cuda_batch_qualification_is_k2_bf16_and_does_not_accumulate():
     assert raw["defaults"]["grad_accum_steps"] == 1
     assert {(case["variant"], case["passes"]) for case in raw["cases"]} == {
         ("memory_add", 2),
-        ("memory_tape32", 2),
+        ("tape", 2),
     }
-    for variant in ("memory_add", "memory_tape32"):
+    for variant in ("memory_add", "tape"):
         assert {
             case["batch_size"] for case in raw["cases"] if case["variant"] == variant
         } == {1, 2, 4, 8}

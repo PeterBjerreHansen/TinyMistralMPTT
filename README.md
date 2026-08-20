@@ -1,57 +1,93 @@
 # TinyMistralMPTT
 
-Research code for MemoryAdd, MemoryTape32, SparseMemoryTape, the simple
-MemoryAdd+SparseTape hybrid, and recurrent inference on a
-validated TinyMistral backbone.
+Research code for multipass/recurrent TinyMistral experiments on a validated
+TinyMistral backbone. The active recurrent model surface is deliberately small:
+
+- `memory_add`: one-step previous-pass top-state feedback;
+- `tape`: one learned tape architecture with dense, periodic, or explicit
+  `<MEM>` writes;
+- `tape_add_hybrid`: the same tape plus the MemoryAdd fast recurrent channel.
+
+`fbt` remains an independent research control and `vanilla` is the ordinary
+TinyMistral baseline.
 
 ## Repository map
 
 - `src/tiny_mistral/`: validated vendored vanilla TinyMistral implementation.
 - `src/tiny_mistral_mptt/`: research architectures, training, evaluation, and inference.
-- `benchmarks/`: scientific controls, development studies, historical evidence,
-  decisive core studies, ad-hoc work, and engineering efficiency measurements.
-- `data/`: dataset recipes beside the generated artifacts they define.
+- `benchmarks/`: controls, development/core studies, historical evidence, and
+  engineering efficiency measurements.
+- `data/`: deterministic dataset recipes; generated artifacts are local/ignored.
 - `evaluation/`: reusable evaluation-suite definitions.
-- `docs/`: durable architecture, training, inference, precision, data, and
-  provenance contracts.
+- `docs/`: architecture, data, training, inference, cloud, and validation contracts.
 
 There is intentionally no central `configs/` directory. Runnable settings live
-with the study or asset that owns them. Development/core studies use a
-`STUDY.yaml` for the scientific question and arm membership; the runnable YAML
-files remain the sole source of execution parameters.
+with the study or asset that owns them. Development/core studies use
+`STUDY.yaml` for the scientific question and comparison structure; runnable YAML
+files remain the execution source of truth.
 
-Within a benchmark study, compact result records belong directly in `results/`.
-Raw checkpoints, `run.json`, `metrics.jsonl`, and similar training artifacts go
-under `results/generated/`, which is ignored by Git.
+Raw checkpoints, `run.json`, `metrics.jsonl`, `segments.jsonl`, snapshots, and
+other large execution artifacts belong under the owning study/control's `results/generated/` directory and are ignored by Git.
 
-The checkpoint directory is `checkpoints/TinyMistral-248M-v3/`. This exact name
-is retained because it is the upstream model identifier, not this repository's
-version. The upstream revision is pinned in `docs/UPSTREAMS.md`.
+## Tape model
 
-## Current Stage 2 status
+All tape policies share the same identity-initialized learned writer and the
+same per-layer GQA tape readers:
 
-The Stage 2 protocol remains open. The historical clean-room lineage selected
-`1e-6` for both backbone and added parameters and provisionally favored K=2 at
-512-token context. The active 2048-token qualification also supports K=2 as the
-lower-compute baseline, but no 100M-token core campaign is locked.
-
-The validated 2048-token development trajectory uses one 2048-token microbatch
-per optimizer update. CUDA may justify a larger microbatch for throughput, but
-that optimizer-batch change must be measured explicitly rather than inherited
-from a hardware default. `make efficiency-cuda-batch-qualification` measures
-K=2 MemoryAdd/MemoryTape32 at accumulation 1; `scripts/select_cuda_batch.py`
-then reports the smallest common efficient microbatch and whether it changes the
-scientific optimizer-batch size.
-
-Current evidence:
-
-```text
-benchmarks/historical/stage2_cleanroom_v1/results/k_sweep.md
-benchmarks/development/k_selection/results/baseline_2048.md
+```yaml
+variant: tape
+memory_window: 32
+memory_write_mode: dense       # dense | periodic | memory_token
 ```
 
-Do not start a core Stage 2 campaign until a core study is explicitly declared
-and locked.
+Periodic writes additionally require `memory_write_stride`. Explicit memory
+slots use:
+
+```yaml
+variant: tape
+memory_window: 32
+memory_write_mode: memory_token
+memory_write_stride: 8
+memory_token_visibility: visible   # visible | write_only
+```
+
+`<MEM>` is an input-only architecture position with ID equal to the base
+vocabulary size `V`; it is not added to the LM output head. For physical input
+`A <MEM> B`, the language target at A is B, the MEM position has no LM loss, and
+`h_MEM` writes one tape record. See `docs/TAPE_MEMORY.md` for the exact attention,
+loss, cached-inference, and hybrid contracts.
+
+## Training and cloud execution
+
+The trainer supports exact resume on interruptible/spot instances: durable
+checkpoint generations, newest-corrupt fallback, metrics repair, source/data
+provenance, wall-clock and token checkpoint triggers, SIGINT/SIGTERM graceful
+checkpointing, and weights-only scientific snapshots. See `docs/CLOUD.md`.
+
+Memory-token runs distinguish linguistic data dose from physical transformer
+work:
+
+```text
+unique_tokens_seen       = linguistic/data tokens
+model_positions_seen     = ordinary + <MEM> physical positions
+token_equivalent_compute = model positions x effective passes
+```
+
+Learning-rate schedules and run token budgets use linguistic tokens. Throughput
+telemetry reports both linguistic tokens/s and model positions/s.
+
+## Current research status
+
+The Stage 2 protocol remains open. No long-run core comparison is locked.
+
+The clean tape-memory development study is
+`benchmarks/development/tape_memory/`. It remains `planned` until the substrate
+and hardware gates are complete. The intended sequence is dense tape, periodic
+C4/C8/C16/C32 at W=32, selected-cadence periodic-vs-MEM ablation, then the
+selected tape against MemoryAdd and TapeAddHybrid.
+
+Historical benchmark results remain read-only evidence; they do not define the
+active architecture API.
 
 ## Validate
 
@@ -60,24 +96,19 @@ uv sync --extra data --extra eval
 make check
 ```
 
-`make check` runs tests, byte-compilation, study-manifest verification, and
-`git diff --check` when the checkout has Git metadata.
+Without dependency installation, the source tree can also be tested in an
+environment that already provides the locked dependencies with:
 
-Prepare and verify the active local 2048-token data artifact:
+```bash
+PYTHONPATH=src pytest -q
+```
+
+Prepare/verify the local data artifact with:
 
 ```bash
 uv run python scripts/prepare_data.py
 uv run python scripts/verify_data.py data/dolmino/local_2048
 ```
 
-Run engineering efficiency batteries using the targets documented in
-`benchmarks/efficiency/`. Before paid CUDA training, follow `docs/CLOUD.md` and
-run the provider-agnostic cloud preflight against the exact intended config.
-
-
-## Sparse-memory architecture branch (`sparse_memory`)
-
-The `sparse_memory` development branch adds `sparse_memory_tape` and
-`memory_add_sparse_tape`. See `docs/SPARSE_MEMORY_V1.md` and
-`docs/ARCHITECTURES.md`. These models are experimental and are not part of the current dense Add/Tape
-qualification or any locked core campaign.
+Before paid CUDA training, qualify batching using `benchmarks/efficiency/`, then
+run the provider-agnostic preflight described in `docs/CLOUD.md`.

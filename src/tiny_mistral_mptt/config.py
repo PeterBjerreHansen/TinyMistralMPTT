@@ -8,14 +8,7 @@ from typing import Any
 import yaml
 
 
-SUPPORTED_VARIANTS = {
-    "vanilla",
-    "fbt",
-    "memory_add",
-    "memory_tape32",
-    "sparse_memory_tape",
-    "memory_add_sparse_tape",
-}
+SUPPORTED_VARIANTS = {"vanilla", "fbt", "memory_add", "tape", "tape_add_hybrid"}
 SUPPORTED_LR_SCHEDULES = {"constant", "cosine", "piecewise_linear"}
 SUPPORTED_AUTOCAST_DTYPES = {"bfloat16"}
 
@@ -159,8 +152,7 @@ class ExperimentConfig:
     grad_accum_steps: int = 1
     max_unique_tokens: int = 65_536
 
-    # ``learning_rate`` remains the backwards-compatible vanilla/base default.
-    # Phase-B parameter groups may override it independently.
+    # Base learning rate; Phase-B parameter groups may override it independently.
     learning_rate: float = 1e-6
     pretrained_learning_rate: float | None = None
     added_learning_rate: float | None = None
@@ -174,6 +166,9 @@ class ExperimentConfig:
     eval_batches: int = 16
     eval_passes: int = 1
     checkpoint_every_tokens: int = 65_536
+    checkpoint_every_seconds: float = 0.0
+    checkpoint_keep_last: int = 2
+    snapshot_at_tokens: list[int] | None = None
 
     # Architecture/training protocol knobs.
     phase: str = "B"
@@ -181,13 +176,11 @@ class ExperimentConfig:
     pass_loss_weights: list[float] | None = None
     pass_loss_weights_by_k: dict[int, list[float]] | None = None
     memory_window: int = 32
-    # Sparse write settings are deliberately unset at the experiment-config
-    # layer. Sparse runs must declare their cadence explicitly instead of
-    # inheriting an experimental C=8 default. Low-level model constructors may
-    # still retain ergonomic defaults for unit tests and interactive use.
+    # Tape architecture axes. Experiment configs declare them explicitly; the
+    # model constructors retain small ergonomic defaults for unit tests.
     memory_write_mode: str | None = None
     memory_write_stride: int | None = None
-    memory_token_id: int | None = None
+    memory_token_visibility: str | None = None
     prefix_mixin_probability: float = 0.0
 
     # ``resume_from`` restores the exact run. ``init_from`` loads model weights
@@ -200,6 +193,8 @@ class ExperimentConfig:
             self.pass_loss_weights_by_k = _coerce_pass_loss_weights_by_k(
                 self.pass_loss_weights_by_k
             )
+        if self.snapshot_at_tokens is not None:
+            self.snapshot_at_tokens = sorted({int(value) for value in self.snapshot_at_tokens})
 
     def normalized_pass_schedule(self) -> list[dict[str, Any]]:
         return normalize_pass_schedule(self.pass_schedule)
@@ -266,37 +261,45 @@ class ExperimentConfig:
             raise ValueError("eval_passes must be positive")
         if self.checkpoint_every_tokens < 0:
             raise ValueError("checkpoint_every_tokens must be non-negative")
+        if not math.isfinite(float(self.checkpoint_every_seconds)) or self.checkpoint_every_seconds < 0:
+            raise ValueError("checkpoint_every_seconds must be finite and non-negative")
+        if self.checkpoint_keep_last < 2:
+            raise ValueError("checkpoint_keep_last must be at least 2")
+        if self.snapshot_at_tokens is not None:
+            if any(value <= 0 or value > self.max_unique_tokens for value in self.snapshot_at_tokens):
+                raise ValueError("snapshot_at_tokens values must lie in (0, max_unique_tokens]")
         if self.memory_window <= 0:
             raise ValueError("memory_window must be positive")
-        sparse_variants = {"sparse_memory_tape", "memory_add_sparse_tape"}
-        if self.variant in sparse_variants:
-            if self.memory_write_mode is None:
+
+        tape_variants = {"tape", "tape_add_hybrid"}
+        if self.variant in tape_variants:
+            if self.memory_write_mode not in {"dense", "periodic", "memory_token"}:
                 raise ValueError(
-                    "sparse-memory configs must explicitly set memory_write_mode"
+                    "tape configs require memory_write_mode: dense|periodic|memory_token"
                 )
-            if self.memory_write_stride is None:
-                raise ValueError(
-                    "sparse-memory configs must explicitly set memory_write_stride"
-                )
-            if self.memory_write_mode not in {"periodic", "token"}:
-                raise ValueError("memory_write_mode must be 'periodic' or 'token'")
-            if self.memory_write_stride <= 0:
-                raise ValueError("memory_write_stride must be positive")
-            if self.memory_write_mode == "periodic" and self.memory_token_id is not None:
-                raise ValueError("periodic sparse memory must not set memory_token_id")
-            if self.memory_write_mode == "token" and self.memory_token_id is None:
-                raise ValueError("token sparse memory requires memory_token_id")
-            if self.memory_token_id is not None and int(self.memory_token_id) < 0:
-                raise ValueError("memory_token_id must be non-negative")
-        else:
-            if (
-                self.memory_write_mode is not None
-                or self.memory_write_stride is not None
-                or self.memory_token_id is not None
-            ):
-                raise ValueError(
-                    "memory_write_* fields are supported only for sparse-memory variants"
-                )
+            if self.memory_write_mode == "dense":
+                if self.memory_write_stride is not None:
+                    raise ValueError("dense tape must not set memory_write_stride")
+                if self.memory_token_visibility is not None:
+                    raise ValueError("dense tape must not set memory_token_visibility")
+            elif self.memory_write_mode == "periodic":
+                if self.memory_write_stride is None or self.memory_write_stride <= 0:
+                    raise ValueError("periodic tape requires positive memory_write_stride")
+                if self.memory_token_visibility is not None:
+                    raise ValueError("memory_token_visibility applies only to memory_token mode")
+            else:
+                if self.memory_write_stride is None or self.memory_write_stride <= 0:
+                    raise ValueError("memory_token tape requires positive memory_write_stride")
+                if self.memory_token_visibility not in {"visible", "write_only"}:
+                    raise ValueError(
+                        "memory_token tape requires memory_token_visibility: visible|write_only"
+                    )
+        elif (
+            self.memory_write_mode is not None
+            or self.memory_write_stride is not None
+            or self.memory_token_visibility is not None
+        ):
+            raise ValueError("memory_write_* fields are supported only for tape variants")
         if (
             not math.isfinite(float(self.prefix_mixin_probability))
             or not 0.0 <= float(self.prefix_mixin_probability) <= 1.0

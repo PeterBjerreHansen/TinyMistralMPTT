@@ -60,16 +60,17 @@ def evaluate_pass_depth(
         for index in range(limit):
             ids = dataset.batch([index], device=device)
             outputs = model.compute_passes(ids, passes=passes, phase="B")
-            targets = ids[:, 1:]
-            count = int(targets.numel())
+            labels = model.build_lm_labels(ids)
+            count = int(labels.ne(-100).sum().item())
             source_id = dataset.source_id(index)
             token_count += count
             source_tokens[source_id] += count
             for pass_index, pass_output in enumerate(outputs.passes):
-                logits = pass_output.logits[:, :-1, :].float()
+                logits = pass_output.logits.float()
                 loss_sum = F.cross_entropy(
                     logits.reshape(-1, logits.shape[-1]),
-                    targets.reshape(-1),
+                    labels.to(logits.device).reshape(-1),
+                    ignore_index=-100,
                     reduction="sum",
                 )
                 value = float(loss_sum.detach().cpu())

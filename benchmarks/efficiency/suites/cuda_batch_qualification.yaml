@@ -10,11 +10,31 @@ defaults:
   sequence_length: 2048
   grad_accum_steps: 1
 cases:
-  - {variant: memory_add, passes: 2, batch_size: 1}
-  - {variant: memory_add, passes: 2, batch_size: 2}
-  - {variant: memory_add, passes: 2, batch_size: 4}
-  - {variant: memory_add, passes: 2, batch_size: 8}
-  - {variant: memory_tape32, passes: 2, batch_size: 1}
-  - {variant: memory_tape32, passes: 2, batch_size: 2}
-  - {variant: memory_tape32, passes: 2, batch_size: 4}
-  - {variant: memory_tape32, passes: 2, batch_size: 8}
+- variant: memory_add
+  passes: 2
+  batch_size: 1
+- variant: memory_add
+  passes: 2
+  batch_size: 2
+- variant: memory_add
+  passes: 2
+  batch_size: 4
+- variant: memory_add
+  passes: 2
+  batch_size: 8
+- variant: tape
+  passes: 2
+  batch_size: 1
+  memory_write_mode: dense
+- variant: tape
+  passes: 2
+  batch_size: 2
+  memory_write_mode: dense
+- variant: tape
+  passes: 2
+  batch_size: 4
+  memory_write_mode: dense
+- variant: tape
+  passes: 2
+  batch_size: 8
+  memory_write_mode: dense

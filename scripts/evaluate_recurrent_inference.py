@@ -11,13 +11,12 @@ import torch
 from tiny_mistral.device import resolve_device
 from tiny_mistral_mptt.config import load_experiment_config
 from tiny_mistral_mptt.data.manifest import file_sha256
-from tiny_mistral_mptt.data.packed_dataset import PackedTokenDataset
+from tiny_mistral_mptt.data.packed_dataset import load_packed_dataset_for_experiment
 from tiny_mistral_mptt.evaluation.recurrent import evaluate_recurrent_continuation
 from tiny_mistral_mptt.model_factory import load_variant_from_config
 from tiny_mistral_mptt.variants.memory_add import MemoryAddVariant
-from tiny_mistral_mptt.variants.memory_add_sparse_tape import MemoryAddSparseTapeVariant
-from tiny_mistral_mptt.variants.memory_tape32 import MemoryTape32Variant
-from tiny_mistral_mptt.variants.sparse_memory_tape import SparseMemoryTapeVariant
+from tiny_mistral_mptt.variants.tape import TapeVariant
+from tiny_mistral_mptt.variants.tape_add_hybrid import TapeAddHybridVariant
 
 
 def main() -> None:
@@ -53,18 +52,13 @@ def main() -> None:
         raise SystemExit("--prefill-passes values must be positive")
 
     cfg = load_experiment_config(args.config)
-    if cfg.variant not in {
-        "memory_add",
-        "memory_tape32",
-        "sparse_memory_tape",
-        "memory_add_sparse_tape",
-    }:
+    if cfg.variant not in {"memory_add", "tape", "tape_add_hybrid"}:
         raise SystemExit("evaluate_recurrent_inference requires a cached-memory variant")
     device = resolve_device(cfg.device)
     model = load_variant_from_config(cfg, device=device)
     if not isinstance(
         model,
-        (MemoryAddVariant, MemoryTape32Variant, SparseMemoryTapeVariant, MemoryAddSparseTapeVariant),
+        (MemoryAddVariant, TapeVariant, TapeAddHybridVariant),
     ):
         raise SystemExit("loaded variant does not implement recurrent memory inference")
 
@@ -75,7 +69,7 @@ def main() -> None:
     model.load_state_dict(payload["model"], strict=True)
     model.eval()
 
-    dataset = PackedTokenDataset(cfg.data_dir, "validation")
+    dataset = load_packed_dataset_for_experiment(cfg.data_dir, "validation", memory_write_mode=cfg.memory_write_mode, memory_write_stride=cfg.memory_write_stride)
     results = []
     for passes in args.prefill_passes:
         result = evaluate_recurrent_continuation(

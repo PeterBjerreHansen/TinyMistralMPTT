@@ -1,0 +1,247 @@
+# Tape memory and explicit `<MEM>` slots
+
+This is the authoritative contract for `tape` and `tape_add_hybrid`.
+
+## 1. Shared tape architecture
+
+All write policies use the same components:
+
+- one shared `TapeWriter`: bias-free `Linear(D,D)`, initialized to identity;
+- one independent `TapeReader` per TinyMistral decoder layer;
+- one chronological tape of writer outputs from the previous pass during
+  full-sequence multipass execution;
+- a bounded chronological `TapeState` during cached/recurrent execution.
+
+Every layer performs ordinary self-attention first, adds its residual, reads the
+tape, adds the tape residual, then performs the normalized MLP residual. The
+reader is Mistral-shaped GQA and has its own query/memory RMSNorm plus Q/K/V/O
+projections.
+
+A tape record is
+
+```text
+m_s = W_write h_s
+```
+
+where `h_s` is a top-layer source-stream state. `memory_window=W` is the maximum
+number of committed records presented to a query. It is not a token-distance
+window.
+
+## 2. Write policies
+
+### Dense
+
+```yaml
+memory_write_mode: dense
+```
+
+Every ordinary physical position writes. This is also the C=1 endpoint of the
+periodic policy.
+
+### Periodic
+
+```yaml
+memory_write_mode: periodic
+memory_write_stride: 8
+```
+
+For zero-based physical position `t`, a write occurs when
+`(t + 1) % C == 0`. With no control positions this means C=8 writes at
+7, 15, 23, ... .
+
+### Explicit memory token
+
+```yaml
+memory_write_mode: memory_token
+memory_write_stride: 8
+memory_token_visibility: visible   # or write_only
+```
+
+The data view inserts one `<MEM>` after each complete group of C linguistic
+tokens when another linguistic token remains in that block. Only MEM positions
+write the tape.
+
+## 3. `<MEM>` is input-only
+
+Let the pretrained vocabulary size be `V`.
+
+```text
+ordinary input IDs: 0 ... V-1
+<MEM> input ID:     V
+LM output classes:  0 ... V-1
+```
+
+The pretrained embedding table and LM head are not resized. Tape variants in
+memory-token mode own one architecture-added learned `memory_token_embedding`;
+ID V selects that vector. The embedding is currently initialized to zero and
+learns as an added parameter.
+
+Because the LM head remains size V, `<MEM>` cannot receive probability mass or
+be sampled as a language token.
+
+## 4. Language loss skips control slots
+
+The physical transformer sequence and linguistic prediction sequence are not
+the same. For
+
+```text
+physical positions:  A    <MEM>    B    C
+LM labels:            B    IGNORE   C    IGNORE
+```
+
+A predicts the next **linguistic** token B across the control slot. The MEM
+hidden state has no direct LM prediction objective. The final ordinary position
+also has no target inside the packed block.
+
+More generally, only ordinary positions predict, and each predicts the nearest
+ordinary token strictly to its right. Every MEM position receives `ignore_index`
+in cross-entropy. This is implemented as position-aligned labels rather than an
+ordinary one-position shift.
+
+The MEM representation can still receive gradients indirectly. In visible mode
+future ordinary-token losses can flow through self-attention into MEM; in both
+modes later recurrent/tape-mediated losses can flow through the tape reader,
+writer, and MEM state.
+
+## 5. Self-attention visibility
+
+### `visible`
+
+`<MEM>` is an ordinary causal self-attention K/V position. Later tokens may use
+its hidden state locally as well as through the persistent tape. Thus any gain
+can include both dedicated latent compute and improved tape storage.
+
+### `write_only`
+
+`<MEM>` remains a transformer query and can read preceding causal context, but
+its self-attention K/V is marked invalid. No query uses MEM as an ordinary
+self-attention key/value; the MEM input/residual path still exists and its
+hidden state still writes the tape.
+
+This isolates the persistent memory route more cleanly. The boolean key-validity
+mask is supported by the reference, local O(TW), and FlexAttention full-sequence
+backends. Cached KV entries retain their physical/RoPE position and carry the
+same validity bit, so masking does not collapse sequence positions.
+
+## 6. Strict read-compute-write timing
+
+Tape causality is always:
+
+```text
+READ old tape -> COMPUTE current hidden -> optionally WRITE current hidden
+```
+
+A current position never reads its own newly written record. In full-sequence
+multipass execution this is represented by `writes_before[b,t]`, the number of
+records committed strictly before physical position t. In cached execution the
+old bounded `TapeState` is passed to the reader and the append happens only
+after the token hidden is complete.
+
+For memory-token input
+
+```text
+A <MEM> B
+```
+
+`h_MEM` may write a tape record, and B is the first physical position that can
+read that record.
+
+## 7. TapeAddHybrid and `<MEM>`
+
+The hybrid has a fast MemoryAdd channel and the same tape channel. In
+memory-token mode the fast channel advances only on ordinary tokens.
+
+For
+
+```text
+A <MEM> B
+```
+
+the previous-stream alignment is:
+
+```text
+current <MEM> Add source = previous-stream h_A
+current B     Add source = previous-stream h_A
+```
+
+`h_MEM` writes `W_write h_MEM` to the tape but does not become the fast state.
+After B computes, B becomes the next fast state.
+
+During full-sequence multipass training this is implemented by gathering the
+nearest strictly preceding ordinary state from the previous pass. During cached
+recurrent execution a MEM step simply leaves `fast_hidden` unchanged while
+conditionally appending the slow tape.
+
+## 8. Full-sequence versus recurrent execution
+
+During training and exact K-pass evaluation, pass k reads tape/fast feedback
+constructed from completed pass k-1. The same-position source state is never
+visible. This preserves parallel sequence training.
+
+Exact incremental K-pass inference keeps K self-attention streams and updates
+feedback only after all streams process the current physical position. It is
+tested against full-prefix recomputation.
+
+Collapsed recurrent inference starts from the exact K-pass prefill. Its first
+continuation transition therefore matches exact K-pass inference; after that,
+the final live stream feeds its own newly produced states into the recurrent
+feedback machinery.
+
+If a cached decode step consumes `<MEM>`, `next_token_logits` remain the logits
+from the preceding ordinary position because MEM itself predicts nothing.
+
+## 9. Data view and compute accounting
+
+The stored Dolmino artifacts contain only ordinary linguistic IDs. A deterministic
+`MemoryTokenPackedDataset` view inserts ID V at load time, preserving the
+underlying linguistic token order and artifact provenance.
+
+The control positions are **additional physical transformer positions**. For a
+backing block with N linguistic tokens and cadence C:
+
+```text
+physical positions = N + floor((N - 1) / C)
+```
+
+For example, a 2048-linguistic-token block at C=8 becomes 2303 physical model
+positions. This deliberately keeps the linguistic data dose fixed and makes the
+extra MEM compute explicit; periodic and MEM-token experiments are not
+compute-identical.
+
+Training telemetry therefore separates:
+
+```text
+unique_tokens_seen       linguistic/data tokens
+model_positions_seen     physical positions including MEM
+token_equivalent_compute physical positions x effective passes
+```
+
+Run budgets and LR schedules use linguistic tokens. Throughput should report
+both linguistic tokens/s and model positions/s.
+
+## 10. Phase A wrinkle
+
+In dense/periodic Phase A, pass 1 contains no architecture-added parameter, so
+it can run under `no_grad()` while the frozen backbone supplies the source state.
+
+In memory-token Phase A, the architecture-added MEM embedding participates in
+pass 1. Pass-1 autograd must therefore remain enabled even though pretrained
+backbone parameters stay frozen; otherwise the MEM embedding cannot learn
+through later tape-mediated losses.
+
+## 11. Required semantic tests
+
+Before interpreting quality results, the repository requires:
+
+- dense tape == periodic C1 with matching weights;
+- strict-past tape visibility for periodic and MEM writes;
+- A `<MEM>` B label alignment and exact zero direct loss gradient at MEM;
+- LM output dimension remains V while MEM input ID is V;
+- MEM embedding receives Phase-A gradient with backbone frozen;
+- visible MEM can influence later ordinary states through self-attention;
+- write-only MEM can read preceding context but is absent as self-attention K/V;
+- cached write-only validity preserves physical cache positions;
+- TapeAddHybrid leaves fast state unchanged on MEM and advances it on ordinary tokens;
+- exact cached K-pass == full-prefix recomputation across the tape modes;
+- the first collapsed recurrent transition == exact K-pass;
+- interrupted/resumed MEM training is trajectory-equivalent to uninterrupted training.
