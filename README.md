@@ -4,7 +4,7 @@ Research code for multipass/recurrent TinyMistral experiments on a validated
 TinyMistral backbone. The active recurrent model surface is deliberately small:
 
 - `memory_add`: one-step previous-pass top-state feedback;
-- `recirculation`: fixed-alpha source-layer feedback into an earlier layer;
+- `recirculation`: fixed-alpha or adaptive source-layer feedback into an earlier layer;
 - `tape`: one learned tape architecture with dense, periodic, or explicit
   `<MEM>` writes;
 - `tape_add_hybrid`: the same tape plus the MemoryAdd fast recurrent channel.

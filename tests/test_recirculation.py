@@ -3,10 +3,11 @@ import torch
 
 from tiny_mistral import MistralConfig, MistralForCausalLM
 from tiny_mistral_mptt.inference import exact_decode_step, prefill_exact
+from tiny_mistral_mptt.training.phases import configure_phase
 from tiny_mistral_mptt.variants import RecirculationVariant
 
 
-def make_model(alpha: float = 0.1) -> RecirculationVariant:
+def make_model(alpha: float = 0.1, mode: str = "fixed") -> RecirculationVariant:
     torch.manual_seed(0)
     config = MistralConfig(
         vocab_size=31,
@@ -25,6 +26,7 @@ def make_model(alpha: float = 0.1) -> RecirculationVariant:
         source_layer=3,
         destination_layer=1,
         alpha=alpha,
+        mode=mode,
     )
 
 
@@ -54,6 +56,43 @@ def test_alpha_zero_all_passes_equal_vanilla() -> None:
             rtol=0,
             atol=1e-7,
         )
+
+
+def test_adaptive_controller_starts_at_fixed_mixture() -> None:
+    model = make_model(mode="adaptive").eval()
+    source = torch.randn(2, 4, model.config.hidden_size)
+    destination = torch.randn_like(source)
+
+    with torch.no_grad():
+        actual = model._mix(source, destination)
+        expected = 0.1 * model._norm_match(source, destination) + 0.9 * destination
+        assert model.adaptive_controller is not None
+        alpha, beta = model.adaptive_controller(source, destination)
+
+    torch.testing.assert_close(actual, expected, atol=2e-6, rtol=2e-6)
+    assert alpha.shape == source.shape
+    assert beta.shape == source.shape
+    assert bool(((alpha > 0.0) & (alpha < 1.0)).all())
+    assert bool(((beta > 0.0) & (beta < 1.0)).all())
+    assert sum(parameter.numel() for parameter in model.added_parameters()) > 0
+
+
+def test_adaptive_phase_a_trains_only_controller() -> None:
+    model = make_model(mode="adaptive")
+    configure_phase(model, "A")
+    ids = torch.tensor([[1, 2, 3, 4, 5, 6]])
+
+    output = model.compute_loss(ids, phase="A", passes=2, loss_weights=[0.0, 1.0])
+    output.loss.backward()
+
+    added_ids = {id(parameter) for parameter in model.added_parameters()}
+    assert any(parameter.grad is not None for parameter in model.added_parameters())
+    for parameter in model.backbone.parameters():
+        assert parameter.grad is None
+    assert all(
+        parameter.requires_grad == (id(parameter) in added_ids)
+        for parameter in model.parameters()
+    )
 
 
 def test_source_capture_is_source_layer_output_not_final() -> None:
@@ -127,6 +166,31 @@ def test_exact_incremental_runs_and_advances_source_state() -> None:
     assert updated.next_position == state.next_position + 1
     assert updated.streams[0].feedback_memory.shape == old_source.shape
     assert not torch.equal(updated.streams[0].feedback_memory, old_source)
+
+
+def test_adaptive_exact_incremental_matches_full_recomputation() -> None:
+    model = make_model(mode="adaptive").eval()
+    ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7]])
+    prompt_length = 4
+
+    with torch.no_grad():
+        state = prefill_exact(model, ids[:, :prompt_length], passes=3)
+        for position in range(prompt_length, ids.shape[1]):
+            full = model.compute_passes(ids[:, :position], passes=3)
+            torch.testing.assert_close(
+                state.next_token_logits,
+                full.final.logits[:, -1, :],
+                atol=4e-5,
+                rtol=4e-5,
+            )
+            state = exact_decode_step(model, state, ids[:, position : position + 1])
+            full_after = model.compute_passes(ids[:, : position + 1], passes=3)
+            torch.testing.assert_close(
+                state.next_token_logits,
+                full_after.final.logits[:, -1, :],
+                atol=4e-5,
+                rtol=4e-5,
+            )
 
 
 def test_gradients_flow_across_feedback_passes() -> None:

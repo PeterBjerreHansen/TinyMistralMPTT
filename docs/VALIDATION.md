@@ -21,6 +21,9 @@ The suite must enforce:
 
 - ordinary pass 1 matches the vanilla backbone path;
 - MemoryAdd remains a vanilla fixed point at zero projection initialization;
+- adaptive recirculation starts at the configured fixed mixture;
+- adaptive recirculation Phase A freezes the TinyMistral backbone and trains
+  only its coefficient controller;
 - dense tape and periodic C1 are identical with matching weights;
 - periodic and MEM writes are strict-past;
 - tape window counts records and empty/invalid banks return finite exact-zero

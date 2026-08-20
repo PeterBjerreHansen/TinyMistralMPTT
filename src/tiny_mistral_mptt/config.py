@@ -192,6 +192,7 @@ class ExperimentConfig:
     recirculation_source_layer: int | None = None
     recirculation_destination_layer: int | None = None
     recirculation_alpha: float = 0.1
+    recirculation_mode: str = "fixed"
 
     # ``resume_from`` restores the exact run. ``init_from`` loads model weights
     # only and begins a fresh trajectory/optimizer/data schedule.
@@ -282,7 +283,9 @@ class ExperimentConfig:
             raise ValueError("memory_window must be positive")
 
         if self.variant == "recirculation":
-            if self.phase == "A":
+            if self.recirculation_mode not in {"fixed", "adaptive"}:
+                raise ValueError("recirculation_mode must be 'fixed' or 'adaptive'")
+            if self.phase == "A" and self.recirculation_mode == "fixed":
                 raise ValueError(
                     "basic fixed recirculation has no Phase-A parameters; use phase B"
                 )
@@ -309,6 +312,7 @@ class ExperimentConfig:
             self.recirculation_source_layer is not None
             or self.recirculation_destination_layer is not None
             or self.recirculation_alpha != 0.1
+            or self.recirculation_mode != "fixed"
         ):
             raise ValueError("recirculation_* fields apply only to recirculation")
 

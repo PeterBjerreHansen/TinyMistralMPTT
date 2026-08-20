@@ -35,6 +35,7 @@ def build_variant(
     recirculation_source_layer: int | None = None,
     recirculation_destination_layer: int | None = None,
     recirculation_alpha: float = 0.1,
+    recirculation_mode: str = "fixed",
 ) -> ExperimentalVariant:
     if name == "vanilla":
         variant: ExperimentalVariant = VanillaVariant(backbone)
@@ -57,6 +58,8 @@ def build_variant(
             source_layer=recirculation_source_layer,
             destination_layer=recirculation_destination_layer,
             alpha=recirculation_alpha,
+            mode=recirculation_mode,
+            initialization_seed=architecture_seed,
         )
     elif name in {"tape", "tape_add_hybrid"}:
         if memory_write_mode not in {"dense", "periodic", "memory_token"}:
@@ -115,6 +118,7 @@ def load_variant(
     recirculation_source_layer: int | None = None,
     recirculation_destination_layer: int | None = None,
     recirculation_alpha: float = 0.1,
+    recirculation_mode: str = "fixed",
 ) -> ExperimentalVariant:
     backbone = load_model(
         model_dir,
@@ -135,6 +139,7 @@ def load_variant(
         recirculation_source_layer=recirculation_source_layer,
         recirculation_destination_layer=recirculation_destination_layer,
         recirculation_alpha=recirculation_alpha,
+        recirculation_mode=recirculation_mode,
     )
 
 
@@ -158,4 +163,5 @@ def load_variant_from_config(
         recirculation_source_layer=cfg.recirculation_source_layer,
         recirculation_destination_layer=cfg.recirculation_destination_layer,
         recirculation_alpha=cfg.recirculation_alpha,
+        recirculation_mode=cfg.recirculation_mode,
     )

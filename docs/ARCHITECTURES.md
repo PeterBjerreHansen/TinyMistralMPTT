@@ -38,8 +38,35 @@ h_destination <- alpha * norm_match(h_source[t-1])
                   + (1 - alpha) * h_destination
 ```
 
-The architecture has no added trainable parameters. It is a Phase-B control
-with `0 <= destination_layer < source_layer` and `alpha` in `[0, 1]`.
+Fixed mode has no added trainable parameters. It is a Phase-B control with
+`0 <= destination_layer < source_layer` and `alpha` in `[0, 1]`.
+
+The configurable `recirculation_mode: adaptive` setting implements the
+conditional vector alpha/beta variant from Mozer et al. A two-hidden-layer
+GELU MLP with input LayerNorm consumes the concatenated source and destination
+states and predicts independent sigmoid-bounded coefficient vectors:
+
+```text
+(alpha_t, beta_t) = sigmoid(MLP([source_t, destination_t]))
+h_destination <- alpha_t * norm_match(source_t)
+                  + beta_t * destination_t
+```
+
+Its output head is initialized so adaptive mode starts at the fixed mixture
+(`alpha=recirculation_alpha`, `beta=1-alpha`). The controller is an added
+parameter group: use Phase A to freeze the TinyMistral backbone, as in the
+paper, or Phase B to fine-tune the full model. Fixed mode remains the default.
+
+Paper-style controller-only adaptation can be configured as:
+
+```yaml
+variant: recirculation
+phase: A
+recirculation_mode: adaptive
+recirculation_source_layer: 3
+recirculation_destination_layer: 1
+recirculation_alpha: 0.1
+```
 
 ## Tape
 

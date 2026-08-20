@@ -154,6 +154,25 @@ def test_recirculation_config_requires_ordered_layers_and_phase_b():
         )
 
 
+def test_adaptive_recirculation_adds_a_phase_a_controller():
+    cfg = _config(
+        variant="recirculation",
+        phase="A",
+        recirculation_mode="adaptive",
+        recirculation_source_layer=3,
+        recirculation_destination_layer=1,
+    )
+    assert cfg.recirculation_mode == "adaptive"
+
+    with pytest.raises(ValueError, match="recirculation_mode"):
+        _config(
+            variant="recirculation",
+            recirculation_mode="unknown",
+            recirculation_source_layer=3,
+            recirculation_destination_layer=1,
+        )
+
+
 def test_recirculation_fields_cannot_silently_change_other_variants():
     with pytest.raises(ValueError, match="apply only to recirculation"):
         _config(

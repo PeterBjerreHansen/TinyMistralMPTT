@@ -57,3 +57,16 @@ def test_factory_builds_recirculation_with_explicit_layer_contract():
         recirculation_destination_layer=0,
     )
     assert isinstance(model, RecirculationVariant)
+
+    adaptive = build_variant(
+        "recirculation",
+        MistralForCausalLM(
+            micro_config(num_hidden_layers=2), attention_backend="reference"
+        ),
+        recirculation_source_layer=1,
+        recirculation_destination_layer=0,
+        recirculation_mode="adaptive",
+    )
+    assert isinstance(adaptive, RecirculationVariant)
+    assert adaptive.mode == "adaptive"
+    assert list(adaptive.added_parameters())
