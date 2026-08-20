@@ -31,6 +31,8 @@ def build_variant(
     memory_write_mode: str | None = None,
     memory_write_stride: int | None = None,
     memory_token_visibility: str | None = None,
+    memory_layers: str | list[int] = "all",
+    memory_position_encoding: str = "rope",
     prefix_mixin_probability: float = 0.0,
     recirculation_source_layer: int | None = None,
     recirculation_destination_layer: int | None = None,
@@ -90,6 +92,8 @@ def build_variant(
             memory_write_mode=memory_write_mode,
             memory_write_stride=stride,
             memory_token_visibility=visibility,
+            memory_layers=memory_layers,
+            memory_position_encoding=memory_position_encoding,
             initialization_seed=architecture_seed,
         )
         variant = TapeVariant(backbone, **kwargs) if name == "tape" else TapeAddHybridVariant(backbone, **kwargs)
@@ -114,6 +118,8 @@ def load_variant(
     memory_write_mode: str | None = None,
     memory_write_stride: int | None = None,
     memory_token_visibility: str | None = None,
+    memory_layers: str | list[int] = "all",
+    memory_position_encoding: str = "rope",
     prefix_mixin_probability: float = 0.0,
     recirculation_source_layer: int | None = None,
     recirculation_destination_layer: int | None = None,
@@ -135,6 +141,8 @@ def load_variant(
         memory_write_mode=memory_write_mode,
         memory_write_stride=memory_write_stride,
         memory_token_visibility=memory_token_visibility,
+        memory_layers=memory_layers,
+        memory_position_encoding=memory_position_encoding,
         prefix_mixin_probability=prefix_mixin_probability,
         recirculation_source_layer=recirculation_source_layer,
         recirculation_destination_layer=recirculation_destination_layer,
@@ -159,6 +167,10 @@ def load_variant_from_config(
         memory_write_mode=cfg.memory_write_mode,
         memory_write_stride=cfg.memory_write_stride,
         memory_token_visibility=cfg.memory_token_visibility,
+        memory_layers="all" if cfg.memory_layers is None else cfg.memory_layers,
+        memory_position_encoding=(
+            "rope" if cfg.memory_position_encoding is None else cfg.memory_position_encoding
+        ),
         prefix_mixin_probability=cfg.prefix_mixin_probability,
         recirculation_source_layer=cfg.recirculation_source_layer,
         recirculation_destination_layer=cfg.recirculation_destination_layer,

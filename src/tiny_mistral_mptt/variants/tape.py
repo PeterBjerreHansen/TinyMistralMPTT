@@ -6,7 +6,13 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 
-from tiny_mistral.modeling import LayerKVCache, MistralForCausalLM, MistralRMSNorm
+from tiny_mistral.modeling import (
+    LayerKVCache,
+    MistralForCausalLM,
+    MistralRMSNorm,
+    MistralRotaryEmbedding,
+    rotate_half,
+)
 
 from ..attention.memory_local import (
     memory_bank_attention,
@@ -19,6 +25,7 @@ from .multipass import MultiPassVariant
 
 MEMORY_WRITE_MODES = {"dense", "periodic", "memory_token"}
 MEMORY_TOKEN_VISIBILITIES = {"visible", "write_only"}
+MEMORY_POSITION_ENCODINGS = {"rope", "none"}
 
 
 class TapeReader(nn.Module):
@@ -29,6 +36,7 @@ class TapeReader(nn.Module):
         backbone: MistralForCausalLM,
         *,
         window: int,
+        position_encoding: str = "rope",
         initialization_seed: int,
     ):
         super().__init__()
@@ -39,6 +47,14 @@ class TapeReader(nn.Module):
         self.head_dim = int(config.head_dim)
         self.window = int(window)
         self.dropout_p = float(config.attention_dropout)
+        if position_encoding not in MEMORY_POSITION_ENCODINGS:
+            raise ValueError("position_encoding must be 'rope' or 'none'")
+        self.position_encoding = str(position_encoding)
+        self.rotary_emb = MistralRotaryEmbedding(
+            self.head_dim,
+            max_position_embeddings=int(config.max_position_embeddings),
+            base=float(config.rope_theta),
+        )
 
         with torch.random.fork_rng(devices=[]):
             torch.manual_seed(int(initialization_seed))
@@ -65,18 +81,72 @@ class TapeReader(nn.Module):
                 self.num_heads * self.head_dim, self.hidden_size, bias=False
             )
             std = float(config.initializer_range)
-            for module in (self.q_proj, self.k_proj, self.v_proj, self.o_proj):
+            for module in (self.q_proj, self.k_proj, self.v_proj):
                 nn.init.normal_(module.weight, mean=0.0, std=std)
+            # Retrofitting a pretrained backbone must start as an exact no-op.
+            # The output projection learns first; once it moves away from zero,
+            # gradients reach Q/K/V and the writer on subsequent updates.
+            nn.init.zeros_(self.o_proj.weight)
 
-    def project_query(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    @staticmethod
+    def _validate_positions(
+        position_ids: torch.Tensor | None,
+        *,
+        batch_size: int,
+        sequence_length: int,
+        label: str,
+    ) -> torch.Tensor:
+        if position_ids is None:
+            raise ValueError(f"{label} are required when memory RoPE is enabled")
+        if position_ids.shape != (batch_size, sequence_length) or position_ids.dtype not in (
+            torch.int32,
+            torch.int64,
+        ):
+            raise ValueError(f"{label} must be integer [B,T]")
+        if bool((position_ids < 0).any()):
+            raise ValueError(f"{label} must be non-negative")
+        return position_ids
+
+    def _apply_position_encoding(
+        self,
+        states: torch.Tensor,
+        position_ids: torch.Tensor | None,
+        *,
+        label: str,
+    ) -> torch.Tensor:
+        if self.position_encoding == "none":
+            return states
+        positions = self._validate_positions(
+            position_ids,
+            batch_size=states.shape[0],
+            sequence_length=states.shape[-2],
+            label=label,
+        ).to(device=states.device)
+        cos, sin = self.rotary_emb(states, positions)
+        cos = cos[:, None, :, :]
+        sin = sin[:, None, :, :]
+        return (states * cos) + (rotate_half(states) * sin)
+
+    def project_query(
+        self,
+        hidden_states: torch.Tensor,
+        *,
+        position_ids: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         if hidden_states.ndim != 3 or hidden_states.shape[-1] != self.hidden_size:
             raise ValueError("hidden_states must be [B,T,D] with the reader hidden size")
         bsz, query_len, _ = hidden_states.shape
         query = self.q_proj(self.query_norm(hidden_states))
-        return query.view(bsz, query_len, self.num_heads, self.head_dim).transpose(1, 2)
+        query = query.view(bsz, query_len, self.num_heads, self.head_dim).transpose(1, 2)
+        return self._apply_position_encoding(
+            query, position_ids, label="query position_ids"
+        )
 
     def project_memory(
-        self, memory_states: torch.Tensor
+        self,
+        memory_states: torch.Tensor,
+        *,
+        position_ids: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if memory_states.ndim != 3 or memory_states.shape[-1] != self.hidden_size:
             raise ValueError("memory_states must be [B,M,D] with the reader hidden size")
@@ -88,29 +158,45 @@ class TapeReader(nn.Module):
         value = self.v_proj(memory).view(
             bsz, memory_len, self.num_key_value_heads, self.head_dim
         ).transpose(1, 2)
+        key = self._apply_position_encoding(
+            key, position_ids, label="memory position_ids"
+        )
         return key, value
 
     def _project(
         self,
         hidden_states: torch.Tensor,
         memory_states: torch.Tensor,
+        *,
+        query_position_ids: torch.Tensor | None = None,
+        memory_position_ids: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if hidden_states.ndim != 3 or memory_states.ndim != 3:
             raise ValueError("hidden_states and memory_states must be [B,T,D]")
         if hidden_states.shape[0] != memory_states.shape[0]:
             raise ValueError("hidden and memory batch sizes differ")
         return (
-            self.project_query(hidden_states),
-            *self.project_memory(memory_states),
+            self.project_query(hidden_states, position_ids=query_position_ids),
+            *self.project_memory(memory_states, position_ids=memory_position_ids),
         )
 
     def forward(
-        self, hidden_states: torch.Tensor, memory_states: torch.Tensor
+        self,
+        hidden_states: torch.Tensor,
+        memory_states: torch.Tensor,
+        *,
+        query_position_ids: torch.Tensor | None = None,
+        memory_position_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if hidden_states.shape != memory_states.shape:
             raise ValueError("hidden_states and memory_states must share [B,T,D]")
         bsz, seq_len, _ = hidden_states.shape
-        query, key, value = self._project(hidden_states, memory_states)
+        query, key, value = self._project(
+            hidden_states,
+            memory_states,
+            query_position_ids=query_position_ids,
+            memory_position_ids=memory_position_ids,
+        )
         output = strict_past_local_attention(
             query,
             key,
@@ -128,18 +214,23 @@ class TapeReader(nn.Module):
         memory_states: torch.Tensor,
         *,
         memory_mask: torch.Tensor | None = None,
+        query_position_ids: torch.Tensor | None = None,
+        memory_position_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Attend to a bank whose entries are already strictly in the past."""
         if hidden_states.ndim != 3 or hidden_states.shape[1] != 1:
             raise ValueError("cached Tape query must be [B,1,D]")
         if memory_states.shape[1] > self.window:
             raise ValueError("cached memory bank exceeds configured window")
-        key, value = self.project_memory(memory_states)
+        key, value = self.project_memory(
+            memory_states, position_ids=memory_position_ids
+        )
         return self.forward_projected_bank(
             hidden_states,
             key,
             value,
             memory_mask=memory_mask,
+            query_position_ids=query_position_ids,
         )
 
     def forward_projected_bank(
@@ -149,6 +240,7 @@ class TapeReader(nn.Module):
         projected_values: torch.Tensor,
         *,
         memory_mask: torch.Tensor | None = None,
+        query_position_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Read a bank whose K/V projections were computed when it was written."""
         if hidden_states.ndim != 3 or hidden_states.shape[-1] != self.hidden_size:
@@ -165,7 +257,9 @@ class TapeReader(nn.Module):
             raise ValueError("projected memory has an incompatible head dimension")
         if projected_keys.shape[2] > self.window:
             raise ValueError("cached memory bank exceeds configured window")
-        query = self.project_query(hidden_states)
+        query = self.project_query(
+            hidden_states, position_ids=query_position_ids
+        )
         output = memory_bank_attention(
             query,
             projected_keys,
@@ -185,12 +279,20 @@ class TapeReader(nn.Module):
         *,
         writes_before: torch.Tensor,
         memory_mask: torch.Tensor,
+        query_position_ids: torch.Tensor | None = None,
+        memory_position_ids: torch.Tensor | None = None,
+        dense: bool = False,
     ) -> torch.Tensor:
         """Attend to the last ``window`` committed records at each query token."""
         if hidden_states.ndim != 3 or memory_states.ndim != 3:
             raise ValueError("hidden_states and memory_states must be [B,T,D]")
         bsz, query_len, _ = hidden_states.shape
-        query, key, value = self._project(hidden_states, memory_states)
+        query, key, value = self._project(
+            hidden_states,
+            memory_states,
+            query_position_ids=query_position_ids,
+            memory_position_ids=memory_position_ids,
+        )
         output = strict_past_tape_attention(
             query,
             key,
@@ -200,6 +302,7 @@ class TapeReader(nn.Module):
             window=self.window,
             dropout_p=self.dropout_p,
             training=self.training,
+            dense=dense,
         )
         output = output.transpose(1, 2).contiguous().view(bsz, query_len, -1)
         return self.o_proj(output)
@@ -208,11 +311,13 @@ class TapeReader(nn.Module):
 
 @dataclass(frozen=True)
 class TapeBatch:
-    """Compact full-sequence tape plus strict-past write counts."""
+    """Compact full-sequence tape with original sequence coordinates."""
 
     memories: torch.Tensor  # [B,M,D], padded chronologically per example
     valid: torch.Tensor  # bool [B,M]
     writes_before: torch.Tensor  # [B,T]
+    memory_positions: torch.Tensor  # integer [B,M], original sequence positions
+    query_positions: torch.Tensor  # integer [B,T], original sequence positions
 
     def __post_init__(self) -> None:
         if self.memories.ndim != 3:
@@ -223,6 +328,18 @@ class TapeBatch:
             raise ValueError("TapeBatch.writes_before must be [B,T]")
         if self.writes_before.shape[0] != self.memories.shape[0]:
             raise ValueError("tape batch sizes differ")
+        if self.memory_positions.shape != self.valid.shape or (
+            self.memory_positions.dtype not in (torch.int32, torch.int64)
+        ):
+            raise ValueError("TapeBatch.memory_positions must be integer [B,M]")
+        if self.query_positions.shape != self.writes_before.shape or (
+            self.query_positions.dtype not in (torch.int32, torch.int64)
+        ):
+            raise ValueError("TapeBatch.query_positions must be integer [B,T]")
+        if bool((self.memory_positions[self.valid] < 0).any()):
+            raise ValueError("valid TapeBatch memory positions must be non-negative")
+        if bool((self.query_positions < 0).any()):
+            raise ValueError("TapeBatch query positions must be non-negative")
 
 
 class TapeWriter(nn.Module):
@@ -263,6 +380,8 @@ class TapeVariant(MultiPassVariant):
         memory_write_mode: str = "periodic",
         memory_write_stride: int = 8,
         memory_token_visibility: str = "visible",
+        memory_layers: str | list[int] = "all",
+        memory_position_encoding: str = "rope",
         initialization_seed: int = 4242,
     ):
         super().__init__(backbone)
@@ -276,12 +395,30 @@ class TapeVariant(MultiPassVariant):
             raise ValueError("memory_token_visibility must be 'visible' or 'write_only'")
         if memory_write_mode != "memory_token" and memory_token_visibility != "visible":
             raise ValueError("memory_token_visibility applies only to memory_token mode")
+        if memory_position_encoding not in MEMORY_POSITION_ENCODINGS:
+            raise ValueError("memory_position_encoding must be 'rope' or 'none'")
+
+        layer_count = len(backbone.model.layers)
+        if memory_layers == "all":
+            selected_layers = tuple(range(layer_count))
+        elif isinstance(memory_layers, (list, tuple)) and memory_layers:
+            selected_layers = tuple(sorted(int(layer) for layer in memory_layers))
+            if len(selected_layers) != len(set(selected_layers)):
+                raise ValueError("memory_layers indices must be unique")
+            if selected_layers[0] < 0 or selected_layers[-1] >= layer_count:
+                raise ValueError(
+                    f"memory_layers must lie in [0, {layer_count - 1}]"
+                )
+        else:
+            raise ValueError("memory_layers must be 'all' or a non-empty list")
 
         base_vocab = int(backbone.config.vocab_size)
         self.memory_window = int(memory_window)
         self.memory_write_mode = str(memory_write_mode)
         self.memory_write_stride = int(memory_write_stride)
         self.memory_token_visibility = str(memory_token_visibility)
+        self.memory_layers = selected_layers
+        self.memory_position_encoding = str(memory_position_encoding)
         self.memory_token_id = base_vocab if memory_write_mode == "memory_token" else None
         self.base_vocab_size = base_vocab
 
@@ -294,16 +431,21 @@ class TapeVariant(MultiPassVariant):
             self.memory_token_embedding = nn.Parameter(torch.zeros(hidden_size))
         else:
             self.register_parameter("memory_token_embedding", None)
-        self.memory_readers = nn.ModuleList(
-            [
-                TapeReader(
+        self.memory_readers = nn.ModuleDict(
+            {
+                str(layer_index): TapeReader(
                     backbone,
                     window=self.memory_window,
+                    position_encoding=self.memory_position_encoding,
                     initialization_seed=int(initialization_seed) + layer_index,
                 )
-                for layer_index in range(len(backbone.model.layers))
-            ]
+                for layer_index in self.memory_layers
+            }
         )
+        self._reader_cache_index = {
+            layer_index: cache_index
+            for cache_index, layer_index in enumerate(self.memory_layers)
+        }
 
     @property
     def uses_memory_tokens(self) -> bool:
@@ -414,6 +556,34 @@ class TapeVariant(MultiPassVariant):
             return row[None, :].expand(input_ids.shape[0], -1)
         return self.memory_token_mask(input_ids)
 
+    def sequence_positions(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """Return cross-attention coordinates anchored to linguistic sequence positions.
+
+        Ordinary dense/periodic inputs use their physical token positions. In
+        memory-token mode, an inserted control position inherits the preceding
+        linguistic boundary and therefore does not inflate memory age.
+        """
+        self._validate_input_ids(input_ids)
+        if not self.uses_memory_tokens:
+            positions = torch.arange(
+                input_ids.shape[1], device=input_ids.device, dtype=torch.long
+            )
+            return positions[None, :].expand(input_ids.shape[0], -1)
+        ordinary = ~self.memory_token_mask(input_ids)
+        positions = ordinary.long().cumsum(dim=1) - 1
+        return positions.clamp_min(0)
+
+    def next_sequence_positions(self, input_ids: torch.Tensor) -> torch.Tensor:
+        self._validate_input_ids(input_ids)
+        if self.uses_memory_tokens:
+            return (~self.memory_token_mask(input_ids)).sum(dim=1, dtype=torch.long)
+        return torch.full(
+            (input_ids.shape[0],),
+            input_ids.shape[1],
+            device=input_ids.device,
+            dtype=torch.long,
+        )
+
     def _compact_written_states(
         self,
         written_states: torch.Tensor,
@@ -441,6 +611,34 @@ class TapeVariant(MultiPassVariant):
             )
         return torch.stack(rows, dim=0), torch.stack(masks, dim=0)
 
+    @staticmethod
+    def _compact_written_positions(
+        positions: torch.Tensor,
+        write_mask: torch.Tensor,
+        *,
+        width: int,
+    ) -> torch.Tensor:
+        if positions.shape != write_mask.shape:
+            raise ValueError("positions/write_mask shapes are incompatible")
+        rows: list[torch.Tensor] = []
+        for batch_index in range(positions.shape[0]):
+            selected = positions[batch_index, write_mask[batch_index]]
+            if selected.shape[0] < width:
+                selected = torch.cat(
+                    (
+                        selected,
+                        torch.zeros(
+                            width - selected.shape[0],
+                            device=positions.device,
+                            dtype=positions.dtype,
+                        ),
+                    )
+                )
+            rows.append(selected)
+        if not rows:
+            return positions.new_zeros((0, width))
+        return torch.stack(rows, dim=0)
+
     def build_tape(
         self,
         previous_hidden: torch.Tensor,
@@ -452,10 +650,20 @@ class TapeVariant(MultiPassVariant):
             raise ValueError("previous_hidden and input_ids token shapes differ")
         mask = self.write_mask(input_ids)
         selected, valid = self._compact_written_states(previous_hidden, mask)
+        query_positions = self.sequence_positions(input_ids)
+        memory_positions = self._compact_written_positions(
+            query_positions, mask, width=selected.shape[1]
+        )
         memories = self.writer(selected)
         cumulative = mask.long().cumsum(dim=1)
         writes_before = cumulative - mask.long()
-        return TapeBatch(memories=memories, valid=valid, writes_before=writes_before)
+        return TapeBatch(
+            memories=memories,
+            valid=valid,
+            writes_before=writes_before,
+            memory_positions=memory_positions,
+            query_positions=query_positions,
+        )
 
     @staticmethod
     def _cache_next_position(past_key_values: tuple[LayerKVCache, ...]) -> int:
@@ -474,6 +682,7 @@ class TapeVariant(MultiPassVariant):
         past_key_values: tuple[LayerKVCache, ...] | None,
         use_cache: bool,
         self_attention_mask: torch.Tensor | None = None,
+        query_position_ids: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, tuple[LayerKVCache, ...] | None]:
         if token_embeddings.ndim != 3:
             raise ValueError("token_embeddings must be [B,T,D]")
@@ -494,12 +703,18 @@ class TapeVariant(MultiPassVariant):
         position_ids = torch.arange(
             start, start + seq_len, device=token_embeddings.device, dtype=torch.long
         )[None, :].expand(bsz, -1)
+        if isinstance(tape, TapeBatch):
+            memory_query_positions = tape.query_positions
+        else:
+            if query_position_ids is None:
+                query_position_ids = tape.next_sequence_positions[:, None]
+            if query_position_ids.shape != (bsz, seq_len):
+                raise ValueError("cached Tape query positions must be [B,1]")
+            memory_query_positions = query_position_ids
 
         hidden_states = token_embeddings
         new_caches: list[LayerKVCache] | None = [] if use_cache else None
-        for layer_index, (layer, memory_reader) in enumerate(
-            zip(self.backbone.model.layers, self.memory_readers, strict=True)
-        ):
+        for layer_index, layer in enumerate(self.backbone.model.layers):
             residual = hidden_states
             x = layer.input_layernorm(hidden_states)
             past = None if past_key_values is None else past_key_values[layer_index]
@@ -517,30 +732,48 @@ class TapeVariant(MultiPassVariant):
                     raise RuntimeError("cached tape layer did not return KV state")
                 new_caches.append(cache)
 
-            if cached_bank:
-                assert isinstance(tape, TapeState)
-                if tape.projected_keys is None:
-                    memory_delta = memory_reader.forward_bank(
-                        hidden_states, tape.memories, memory_mask=tape.valid
-                    )
+            reader_key = str(layer_index)
+            if reader_key in self.memory_readers:
+                memory_reader = self.memory_readers[reader_key]
+                if cached_bank:
+                    assert isinstance(tape, TapeState)
+                    if tape.projected_keys is None:
+                        memory_delta = memory_reader.forward_bank(
+                            hidden_states,
+                            tape.memories,
+                            memory_mask=tape.valid,
+                            query_position_ids=memory_query_positions,
+                            memory_position_ids=tape.positions,
+                        )
+                    else:
+                        if tape.projected_values is None or len(tape.projected_keys) != len(self.memory_readers):
+                            raise ValueError("TapeState projected K/V does not match tape readers")
+                        cache_index = self._reader_cache_index[layer_index]
+                        memory_delta = memory_reader.forward_projected_bank(
+                            hidden_states,
+                            tape.projected_keys[cache_index],
+                            tape.projected_values[cache_index],
+                            memory_mask=tape.valid,
+                            query_position_ids=memory_query_positions,
+                        )
                 else:
-                    if tape.projected_values is None or len(tape.projected_keys) != len(self.memory_readers):
-                        raise ValueError("TapeState projected K/V does not match tape readers")
-                    memory_delta = memory_reader.forward_projected_bank(
+                    assert isinstance(tape, TapeBatch)
+                    memory_delta = memory_reader.forward_tape(
                         hidden_states,
-                        tape.projected_keys[layer_index],
-                        tape.projected_values[layer_index],
+                        tape.memories,
+                        writes_before=tape.writes_before,
                         memory_mask=tape.valid,
+                        query_position_ids=memory_query_positions,
+                        memory_position_ids=tape.memory_positions,
+                        dense=(
+                            self.memory_write_mode == "dense"
+                            or (
+                                self.memory_write_mode == "periodic"
+                                and self.memory_write_stride == 1
+                            )
+                        ),
                     )
-            else:
-                assert isinstance(tape, TapeBatch)
-                memory_delta = memory_reader.forward_tape(
-                    hidden_states,
-                    tape.memories,
-                    writes_before=tape.writes_before,
-                    memory_mask=tape.valid,
-                )
-            hidden_states = hidden_states + memory_delta
+                hidden_states = hidden_states + memory_delta
             residual = hidden_states
             x = layer.post_attention_layernorm(hidden_states)
             hidden_states = residual + layer.mlp(x)
@@ -594,43 +827,75 @@ class TapeVariant(MultiPassVariant):
             raise TypeError("Tape cached feedback requires TapeState")
         if token is None:
             raise ValueError("cached Tape requires the current token ID")
+        query_positions = self._cached_query_positions(feedback_memory, token)
         hidden, cache = self._run_tape_feedback_core(
             token_embedding,
             feedback_memory,
             past_key_values=past_key_values,
             use_cache=True,
             self_attention_mask=self.self_attention_key_mask(token),
+            query_position_ids=query_positions,
         )
         if cache is None:
             raise RuntimeError("cached Tape token did not return KV state")
         return hidden, cache
 
+    def _cached_query_positions(
+        self, state: TapeState, token: torch.Tensor
+    ) -> torch.Tensor:
+        if token.shape != (state.batch_size, 1):
+            raise ValueError("cached Tape token must be [B,1]")
+        query_positions = state.next_sequence_positions[:, None]
+        if self.uses_memory_tokens:
+            query_positions = torch.where(
+                self.memory_token_mask(token),
+                (query_positions - 1).clamp_min(0),
+                query_positions,
+            )
+        return query_positions
+
     def _state_from_tape_batch(self, tape: TapeBatch) -> TapeState:
         bsz, _, dim = tape.memories.shape
         result = tape.memories.new_zeros((bsz, self.memory_window, dim))
         valid = torch.zeros((bsz, self.memory_window), dtype=torch.bool, device=tape.memories.device)
+        positions = torch.zeros(
+            (bsz, self.memory_window), dtype=torch.long, device=tape.memories.device
+        )
         for batch_index in range(bsz):
             row = tape.memories[batch_index, tape.valid[batch_index], :][-self.memory_window :]
+            row_positions = tape.memory_positions[
+                batch_index, tape.valid[batch_index]
+            ][-self.memory_window :]
             count = row.shape[0]
             if count:
                 result[batch_index, :count, :] = row
                 valid[batch_index, :count] = True
-        return self._project_state(result, valid)
+                positions[batch_index, :count] = row_positions
+        next_positions = tape.query_positions[:, -1] + 1
+        return self._project_state(result, valid, positions, next_positions)
 
     def _project_state(
-        self, memories: torch.Tensor, valid: torch.Tensor
+        self,
+        memories: torch.Tensor,
+        valid: torch.Tensor,
+        positions: torch.Tensor,
+        next_sequence_positions: torch.Tensor,
     ) -> TapeState:
         projected_keys: list[torch.Tensor] = []
         projected_values: list[torch.Tensor] = []
-        for reader in self.memory_readers:
-            key, value = reader.project_memory(memories)
+        for reader in self.memory_readers.values():
+            key, value = reader.project_memory(
+                memories, position_ids=positions
+            )
             projected_keys.append(key.detach())
             projected_values.append(value.detach())
         return TapeState(
-            memories.detach(),
-            valid.detach(),
-            tuple(projected_keys),
-            tuple(projected_values),
+            memories=memories.detach(),
+            valid=valid.detach(),
+            positions=positions.detach(),
+            next_sequence_positions=next_sequence_positions.detach(),
+            projected_keys=tuple(projected_keys),
+            projected_values=tuple(projected_values),
         )
 
     def _feedback_memory_from_hidden(
@@ -671,42 +936,64 @@ class TapeVariant(MultiPassVariant):
         new_hidden: torch.Tensor,
         *,
         trigger: torch.Tensor,
+        write_positions: torch.Tensor,
+        next_sequence_positions: torch.Tensor,
     ) -> TapeState:
         if new_hidden.ndim != 3 or new_hidden.shape[1] != 1:
             raise ValueError("new_hidden must be [B,1,D]")
         if trigger.shape != (new_hidden.shape[0],) or trigger.dtype != torch.bool:
             raise ValueError("trigger must be bool [B]")
+        if write_positions.shape != trigger.shape or write_positions.dtype not in (
+            torch.int32,
+            torch.int64,
+        ):
+            raise ValueError("write_positions must be integer [B]")
+        if next_sequence_positions.shape != trigger.shape or (
+            next_sequence_positions.dtype not in (torch.int32, torch.int64)
+        ):
+            raise ValueError("next_sequence_positions must be integer [B]")
         if state.batch_size != new_hidden.shape[0] or state.hidden_size != new_hidden.shape[-1]:
             raise ValueError("tape and new hidden shapes are incompatible")
         new_record = self.writer(new_hidden).detach()
         memories = state.memories.clone()
         valid = state.valid.clone()
+        positions = state.positions.clone()
         counts = valid.sum(dim=1, dtype=torch.long)
         full_trigger = trigger & counts.eq(self.memory_window)
         shifted_memories = torch.cat(
             (memories[:, 1:, :], torch.zeros_like(memories[:, :1, :])), dim=1
         )
         shifted_valid = torch.cat((valid[:, 1:], torch.zeros_like(valid[:, :1])), dim=1)
+        shifted_positions = torch.cat(
+            (positions[:, 1:], torch.zeros_like(positions[:, :1])), dim=1
+        )
         memories = torch.where(full_trigger[:, None, None], shifted_memories, memories)
         valid = torch.where(full_trigger[:, None], shifted_valid, valid)
+        positions = torch.where(full_trigger[:, None], shifted_positions, positions)
         write_index = counts.clamp(max=self.memory_window - 1)
         scatter_index = write_index[:, None, None].expand(-1, 1, new_record.shape[-1])
         candidate_memories = memories.scatter(1, scatter_index, new_record)
         candidate_valid = valid.scatter(1, write_index[:, None], torch.ones_like(trigger[:, None]))
+        candidate_positions = positions.scatter(1, write_index[:, None], write_positions[:, None])
         memories = torch.where(trigger[:, None, None], candidate_memories, memories)
         valid = torch.where(trigger[:, None], candidate_valid, valid)
+        positions = torch.where(trigger[:, None], candidate_positions, positions)
         if state.projected_keys is None:
-            return self._project_state(memories, valid)
+            return self._project_state(
+                memories, valid, positions, next_sequence_positions
+            )
 
         assert state.projected_values is not None
         if len(state.projected_keys) != len(self.memory_readers):
             raise ValueError("TapeState projected K/V does not match tape readers")
         projected_keys: list[torch.Tensor] = []
         projected_values: list[torch.Tensor] = []
-        for layer_index, reader in enumerate(self.memory_readers):
-            new_key, new_value = reader.project_memory(new_record)
-            old_key = state.projected_keys[layer_index].clone()
-            old_value = state.projected_values[layer_index].clone()
+        for cache_index, reader in enumerate(self.memory_readers.values()):
+            new_key, new_value = reader.project_memory(
+                new_record, position_ids=write_positions[:, None]
+            )
+            old_key = state.projected_keys[cache_index].clone()
+            old_value = state.projected_values[cache_index].clone()
             shifted_key = torch.cat((old_key[:, :, 1:, :], torch.zeros_like(old_key[:, :, :1, :])), dim=2)
             shifted_value = torch.cat((old_value[:, :, 1:, :], torch.zeros_like(old_value[:, :, :1, :])), dim=2)
             old_key = torch.where(full_trigger[:, None, None, None], shifted_key, old_key)
@@ -721,10 +1008,12 @@ class TapeVariant(MultiPassVariant):
             projected_keys.append(old_key.detach())
             projected_values.append(old_value.detach())
         return TapeState(
-            memories.detach(),
-            valid.detach(),
-            tuple(projected_keys),
-            tuple(projected_values),
+            memories=memories.detach(),
+            valid=valid.detach(),
+            positions=positions.detach(),
+            next_sequence_positions=next_sequence_positions.detach(),
+            projected_keys=tuple(projected_keys),
+            projected_values=tuple(projected_values),
         )
 
     def _append_feedback_memory(
@@ -738,4 +1027,24 @@ class TapeVariant(MultiPassVariant):
         if not isinstance(feedback_memory, TapeState):
             raise TypeError("Tape feedback requires TapeState")
         trigger = self._write_trigger(token=token, position=position)
-        return self._append_tape(feedback_memory, new_hidden, trigger=trigger)
+        if token is None:
+            raise ValueError("Tape feedback update requires current token")
+        current_positions = feedback_memory.next_sequence_positions
+        next_positions = current_positions + 1
+        if self.uses_memory_tokens:
+            is_memory = self.memory_token_mask(token)[:, 0]
+            write_positions = torch.where(
+                is_memory, (current_positions - 1).clamp_min(0), current_positions
+            )
+            next_positions = torch.where(
+                is_memory, current_positions, next_positions
+            )
+        else:
+            write_positions = current_positions
+        return self._append_tape(
+            feedback_memory,
+            new_hidden,
+            trigger=trigger,
+            write_positions=write_positions,
+            next_sequence_positions=next_positions,
+        )

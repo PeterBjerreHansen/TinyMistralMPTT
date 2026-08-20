@@ -20,16 +20,21 @@ than NaN/uniform leakage.
 The suite must enforce:
 
 - ordinary pass 1 matches the vanilla backbone path;
+- FBT exact cached inference matches full-prefix multipass recomputation;
 - MemoryAdd remains a vanilla fixed point at zero projection initialization;
 - adaptive recirculation starts at the configured fixed mixture;
 - adaptive recirculation Phase A freezes the TinyMistral backbone and trains
   only its coefficient controller;
 - dense tape and periodic C1 are identical with matching weights;
+- zero-initialized Tape is an exact vanilla fixed point at all pass depths;
+- Tape reader allocation and projected caches match `memory_layers`;
+- memory RoPE retains original linguistic write/query positions through cached eviction;
 - periodic and MEM writes are strict-past;
 - tape window counts records and empty/invalid banks return finite exact-zero
   attention contributions;
 - Phase A freezes pretrained parameters and trains only added parameters;
-- memory-token Phase A preserves pass-1 autograd for the added MEM embedding;
+- memory-token Phase A preserves pass-1 autograd for the added MEM embedding,
+  which receives tape-mediated gradients after zero-output reader activation;
 - pass weights and pass-count scheduling are deterministic and checkpointable.
 
 ## Explicit MEM loss/attention gates
@@ -40,8 +45,8 @@ For `A <MEM> B`:
 - A targets B and the MEM position has `ignore_index`;
 - direct LM gradient at MEM's logits is exactly zero;
 - perturbing ignored MEM-position logits cannot change the language loss;
-- the MEM embedding receives nonzero Phase-A gradient through recurrent/tape
-  pathways;
+- after reader output activation, the MEM embedding receives nonzero Phase-A
+  gradient through recurrent/tape pathways;
 - `visible` permits a local MEM-to-future self-attention dependency;
 - `write_only` permits MEM to read preceding context but prevents MEM from being
   used as self-attention K/V;

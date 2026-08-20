@@ -17,6 +17,8 @@ class TapeState:
 
     memories: torch.Tensor
     valid: torch.Tensor
+    positions: torch.Tensor
+    next_sequence_positions: torch.Tensor
     projected_keys: tuple[torch.Tensor, ...] | None = None
     projected_values: tuple[torch.Tensor, ...] | None = None
 
@@ -27,6 +29,21 @@ class TapeState:
             raise ValueError("TapeState.valid must be bool [B,W]")
         if self.valid.dtype != torch.bool:
             raise ValueError("TapeState.valid must have bool dtype")
+        if self.positions.shape != self.valid.shape or self.positions.dtype not in (
+            torch.int32,
+            torch.int64,
+        ):
+            raise ValueError("TapeState.positions must be integer [B,W]")
+        if self.next_sequence_positions.shape != (self.memories.shape[0],) or (
+            self.next_sequence_positions.dtype not in (torch.int32, torch.int64)
+        ):
+            raise ValueError(
+                "TapeState.next_sequence_positions must be integer [B]"
+            )
+        if bool((self.positions[self.valid] < 0).any()):
+            raise ValueError("valid TapeState positions must be non-negative")
+        if bool((self.next_sequence_positions < 0).any()):
+            raise ValueError("next Tape sequence positions must be non-negative")
         if self.memories.shape[1] < 1:
             raise ValueError("TapeState capacity must be positive")
         if (self.projected_keys is None) != (self.projected_values is None):

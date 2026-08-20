@@ -24,6 +24,8 @@ def make_variant(name: str):
         with torch.no_grad():
             dim = model.config.hidden_size
             model.memory_projection.weight.copy_(0.05 * torch.eye(dim))
+    elif name == "fbt":
+        model = FBTVariant(backbone, initialization_seed=987)
     else:
         raise AssertionError(name)
     return model.eval()
@@ -33,23 +35,14 @@ def sample_ids():
     return torch.tensor([[1, 7, 3, 14, 22, 9, 31, 4, 51, 12, 6, 44, 18]])
 
 
-def test_cached_feedback_capability_is_explicit_for_fbt():
-    backbone = MistralForCausalLM(
-        micro_config(num_hidden_layers=2, sliding_window=4),
-        attention_backend="reference",
-    )
-    model = FBTVariant(backbone, initialization_seed=987).eval()
+def test_fbt_cached_feedback_prefill_is_supported():
+    model = make_variant("fbt")
     prompt = sample_ids()[:, :5]
-
-    # K=1 is ordinary cached TinyMistral and remains supported.
-    state = prefill_exact(model, prompt, passes=1)
-    assert state.prefill_passes == 1
-
-    with pytest.raises(ValueError, match="does not implement cached feedback inference"):
-        prefill_exact(model, prompt, passes=2)
+    state = prefill_exact(model, prompt, passes=2)
+    assert state.prefill_passes == 2
 
 
-@pytest.mark.parametrize("variant_name", ["memory_add"])
+@pytest.mark.parametrize("variant_name", ["memory_add", "fbt"])
 @pytest.mark.parametrize("passes", [1, 2, 3, 4])
 def test_exact_incremental_matches_full_recomputation_for_arbitrary_k(
     variant_name, passes
@@ -98,7 +91,7 @@ def test_exact_incremental_matches_full_recomputation_for_arbitrary_k(
                     assert layer_cache.seq_len <= model.config.sliding_window - 1
 
 
-@pytest.mark.parametrize("variant_name", ["memory_add"])
+@pytest.mark.parametrize("variant_name", ["memory_add", "fbt"])
 @pytest.mark.parametrize("passes", [2, 3, 4])
 def test_recurrent_handoff_is_exact_for_first_processed_token(
     variant_name, passes
@@ -142,7 +135,7 @@ def test_recurrent_handoff_is_exact_for_first_processed_token(
         assert recurrent_after.next_position == exact_after.next_position == 7
 
 
-@pytest.mark.parametrize("variant_name", ["memory_add"])
+@pytest.mark.parametrize("variant_name", ["memory_add", "fbt"])
 def test_k1_recurrent_and_exact_are_vanilla_cached_inference(variant_name):
     model = make_variant(variant_name)
     ids = sample_ids()

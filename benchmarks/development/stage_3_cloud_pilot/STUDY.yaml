@@ -1,0 +1,12 @@
+name: stage_3_cloud_pilot
+status: planned
+question: Which fast, slow, and hybrid feedback models justify confirmation compute?
+arms:
+  - {id: vanilla_seed1337, config: vanilla_seed1337.yaml}
+  - {id: memory_add_seed1337, config: memory_add_seed1337.yaml}
+  - {id: fbt_seed1337, config: fbt_seed1337.yaml}
+  - {id: recirculation_adaptive_seed1337, config: recirculation_adaptive_seed1337.yaml}
+  - {id: tape_seed1337, config: tape_seed1337.yaml}
+  - {id: hybrid_seed1337, config: hybrid_seed1337.yaml}
+comparisons: []
+

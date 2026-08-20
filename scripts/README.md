@@ -39,12 +39,23 @@ storage, free space, and memory-token-expanded batching before a paid run.
 
 ```text
 train.py
+run_study.py
 evaluate_nll.py
 evaluate_lm_harness.py
 evaluate_pass_depth.py
 evaluate_memory_interventions.py
 evaluate_recurrent_inference.py
 generate.py
+```
+
+`run_study.py` is the common executor for colocated development/core studies.
+It validates the manifest, exercises every sampled pass depth with a one-batch
+forward/backward preflight, and then runs selected arms sequentially:
+
+```bash
+uv run python scripts/run_study.py \
+  --study-dir benchmarks/development/stage_1_wiring \
+  --wire-only --wire-device mps
 ```
 
 Training/evaluation loaders automatically wrap ordinary packed artifacts with

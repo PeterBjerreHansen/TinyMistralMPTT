@@ -27,6 +27,33 @@ def test_factory_exposes_only_clean_tape_names_and_policies():
     assert isinstance(hybrid, TapeAddHybridVariant)
 
 
+def test_factory_selects_only_requested_memory_layers_and_defaults_to_rope():
+    multi_layer = MistralForCausalLM(
+        micro_config(num_hidden_layers=3), attention_backend="reference"
+    )
+    model = build_variant(
+        "tape",
+        multi_layer,
+        memory_write_mode="periodic",
+        memory_write_stride=8,
+        memory_layers=[0, 2],
+    )
+    assert model.memory_layers == (0, 2)
+    assert list(model.memory_readers) == ["0", "2"]
+    assert all(reader.position_encoding == "rope" for reader in model.memory_readers.values())
+
+    with pytest.raises(ValueError, match="memory_layers"):
+        build_variant(
+            "tape",
+            MistralForCausalLM(
+                micro_config(num_hidden_layers=2), attention_backend="reference"
+            ),
+            memory_write_mode="periodic",
+            memory_write_stride=8,
+            memory_layers=[2],
+        )
+
+
 @pytest.mark.parametrize(
     "legacy_name",
     ["memory_tape32", "dense_memory_tape", "sparse_memory_tape", "memory_add_sparse_tape"],

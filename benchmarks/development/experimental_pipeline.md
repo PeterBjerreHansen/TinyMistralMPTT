@@ -1,0 +1,134 @@
+# Experimental pipeline
+
+This pipeline answers three scoped questions without spending compute on broad
+hyperparameter searches:
+
+1. Does a sparse, content-addressed Tape improve long-range memory over the
+   local-attention backbone?
+2. Does Tape provide a useful slow-memory channel beyond a fast recurrent
+   channel?
+3. Under the chosen TinyMistral training regime, how do sparse Tape, MemoryAdd,
+   FBT, and adaptive Recirculation compare at similar data and dollar budgets?
+
+The locked Tape default is periodic writes every 32 linguistic tokens, a
+32-record bank, readers after decoder layers 3 and 7, sequence-anchored RoPE,
+an identity-initialized writer, and zero-initialized reader output projections.
+The locked adaptive Recirculation placement is source layer 6 to destination
+layer 3. Layer indices are zero-based. These are good-enough defaults, not
+claims of optimal spacing or placement.
+
+## Shared pass protocol
+
+Phase A samples K=2 on 90% of batches and K=3 on 10%:
+
+```yaml
+pass_schedule:
+  - probabilities: {2: 0.9, 3: 0.1}
+pass_loss_weights_by_k:
+  2: [0.0, 1.0]
+  3: [0.0, 0.0, 1.0]
+```
+
+This estimates `0.9 L2 + 0.1 L3` with 2.1 average passes rather than running
+three passes on every batch. Phase B retains a first-pass objective:
+
+```yaml
+pass_loss_weights_by_k:
+  2: [0.1, 0.9]
+  3: [0.1, 0.0, 0.9]
+```
+
+## Stage 0: implementation gates
+
+Directory: `stage_0_implementation_gates/`.
+
+Complete the architecture tests, full suite, study verification, source-tree
+cleanliness check, and a wire-only construction of Stage 1. Do not begin a
+training trajectory from an uncommitted source snapshot.
+
+## Stage 1: local frozen-backbone wiring
+
+Directory: `stage_1_wiring/`.
+
+Train only architecture-added parameters on MPS. The canonical budgets are 1M
+tokens for MemoryAdd, 2M for FBT and adaptive Recirculation, and 5M for Tape and
+Hybrid. Use the final checkpoint rather than selecting the best intermediate
+validation score. The downstream stages use `init_from`, not `resume_from`, so
+they start new optimizer, sampler, RNG, and pass-scheduler trajectories.
+
+A wiring checkpoint is accepted only if all losses are finite, K=3 does not
+collapse, reader outputs remain bounded, and the relevant added parameters
+receive gradients. Tape is expected to update its output projections on the
+first optimizer step; Q/K/V and writer gradients become nonzero after those
+projections move away from zero.
+
+## Stage 2: local Phase-B smoke
+
+Directory: `stage_2_local_smoke/`.
+
+Initialize from the canonical Stage-1 checkpoints and train each feedback model
+for 1M tokens with the full backbone differentiable. This stage checks
+stability and integration only. It is not a final model comparison.
+
+Do not proceed with a model that has non-finite gradients, persistent pass-2
+regression, K=3 collapse, or recurrent continuation failure.
+
+## Stage 3: cloud pilot
+
+Directory: `stage_3_cloud_pilot/`.
+
+The configs have 10M-token endpoints, but the first invocation stops at 5M via
+`--until-unique-tokens 5242880`. This makes the pilot checkpoint the first
+confirmation seed if the arm is promoted; it can resume to the declared 10M
+endpoint without changing its trajectory.
+
+Before paid execution, run CUDA qualification and change hardware batch fields
+only if the same change is applied to all directly compared arms. Record
+linguistic tokens/s, pass-position compute, peak VRAM, instance runtime, and
+dollars. The first 5M pilot includes Vanilla, MemoryAdd, FBT, adaptive
+Recirculation, sparse Tape, and Hybrid.
+
+At the 5M gate, run pass-depth, recurrent-inference, and memory-intervention
+diagnostics. Tape is promoted only if real Tape performs better than its zero or
+mismatched-memory interventions on at least one long-range measure. Hybrid is
+promoted for the slow-memory claim only if its real Tape channel improves over
+the fast-only intervention.
+
+## Stage 4: selected confirmation
+
+Directory: `stage_4_confirmation/`.
+
+Resume the promoted Stage-3 seed to 10M. Then execute the two additional-seed
+candidate configs only for Vanilla, Tape, Hybrid, and the selected fast-memory
+baseline. FBT and adaptive Recirculation both have candidate configs so this
+selection does not require editing execution settings after observing pilot
+results.
+
+The primary evaluation uses at least 256 fixed validation blocks, controlled
+retrieval/state-tracking lags of 32 through 1024, K=1 through K=8 pass-depth
+stability, exact-versus-collapsed recurrent continuations, and causal memory
+interventions. Report paired block-bootstrap confidence intervals and make
+claims conditional on the shared canonical wiring checkpoint unless Phase A is
+later repeated independently.
+
+## Compute rule
+
+Local compute pays for all wiring and 1M-token integration checks. Cloud spend
+is reserved for qualification, the 5M pilot, and promoted confirmation arms.
+Do not run spacing, reader-layer, controller-placement, learned-write, or broad
+learning-rate sweeps unless a locked default fails an explicit acceptance gate.
+
+The $50 cloud ceiling is allocated before execution:
+
+| Use | Maximum spend |
+| --- | ---: |
+| CUDA memory/throughput qualification | $3 |
+| Six-arm 5M pilot | $10 |
+| Promoted seed-1337 continuation and two additional seeds | $28 |
+| Final diagnostics | $4 |
+| Storage, interruption, and rerun reserve | $5 |
+
+After qualification, record cost per million linguistic tokens from measured
+throughput and shorten confirmation endpoints uniformly if the $28 ceiling
+would be exceeded. A failed or interrupted pilot does not borrow from the
+reserve without an explicit decision recorded in the Stage-3 results notes.

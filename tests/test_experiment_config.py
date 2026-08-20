@@ -88,8 +88,11 @@ def test_tape_config_requires_coherent_write_policy():
         variant="tape",
         memory_write_mode="periodic",
         memory_write_stride=4,
+        memory_layers=[7, 3],
     )
     assert periodic.memory_write_stride == 4
+    assert periodic.memory_layers == [3, 7]
+    assert periodic.memory_position_encoding == "rope"
 
     mem = _config(
         variant="tape_add_hybrid",
@@ -124,6 +127,42 @@ def test_tape_config_requires_coherent_write_policy():
 def test_tape_fields_cannot_silently_change_other_variants():
     with pytest.raises(ValueError, match="supported only for tape variants"):
         _config(variant="memory_add", memory_write_stride=4)
+    with pytest.raises(ValueError, match="supported only for tape variants"):
+        _config(variant="memory_add", memory_layers=[3])
+
+
+def test_tape_memory_layer_and_position_configuration_is_validated():
+    cfg = _config(
+        variant="tape",
+        memory_write_mode="periodic",
+        memory_write_stride=32,
+        memory_layers="all",
+        memory_position_encoding="none",
+    )
+    assert cfg.memory_layers == "all"
+    assert cfg.memory_position_encoding == "none"
+
+    with pytest.raises(ValueError, match="non-empty list"):
+        _config(
+            variant="tape",
+            memory_write_mode="periodic",
+            memory_write_stride=32,
+            memory_layers=[],
+        )
+    with pytest.raises(ValueError, match="unique"):
+        _config(
+            variant="tape",
+            memory_write_mode="periodic",
+            memory_write_stride=32,
+            memory_layers=[3, 3],
+        )
+    with pytest.raises(ValueError, match=r"rope\|none"):
+        _config(
+            variant="tape",
+            memory_write_mode="periodic",
+            memory_write_stride=32,
+            memory_position_encoding="absolute",
+        )
 
 
 def test_recirculation_config_requires_ordered_layers_and_phase_b():

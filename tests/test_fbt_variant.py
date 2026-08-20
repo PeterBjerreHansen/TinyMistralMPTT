@@ -32,7 +32,9 @@ def test_fbt_feedback_uses_strict_previous_position_and_keeps_position_zero():
     previous = torch.randn(1, 4, dim)
     fused = variant.feedback_inputs(embeddings, previous)
     torch.testing.assert_close(fused[:, 0], embeddings[:, 0])
-    torch.testing.assert_close(fused[:, 1:], 0.5 * previous[:, :-1])
+    torch.testing.assert_close(
+        fused[:, 1:], variant.feedback_input_norm(0.5 * previous[:, :-1])
+    )
 
 
 def test_fbt_phase_a_trains_only_added_parameters_and_has_gradient():
@@ -70,7 +72,10 @@ def test_fbt_prefix_mixin_reverts_a_checkpoint_reproducible_prefix():
         variant.feedback_gate.weight.zero_()
         shifted = shift_previous_hidden(previous)
         raw = torch.cat(
-            (embeddings[:, :1, :], 0.5 * shifted[:, 1:, :]),
+            (
+                embeddings[:, :1, :],
+                variant.feedback_input_norm(0.5 * shifted[:, 1:, :]),
+            ),
             dim=1,
         )
 

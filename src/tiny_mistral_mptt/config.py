@@ -63,6 +63,20 @@ def _coerce_pass_loss_weights_by_k(raw: Any) -> dict[int, list[float]]:
     return dict(sorted(result.items()))
 
 
+def _coerce_memory_layers(raw: Any) -> str | list[int]:
+    """Canonicalize Tape reader placement while retaining an ``all`` shorthand."""
+    if raw == "all":
+        return "all"
+    if not isinstance(raw, (list, tuple)) or not raw:
+        raise ValueError("memory_layers must be 'all' or a non-empty list of indices")
+    layers = [int(value) for value in raw]
+    if any(layer < 0 for layer in layers):
+        raise ValueError("memory_layers indices must be non-negative")
+    if len(layers) != len(set(layers)):
+        raise ValueError("memory_layers indices must be unique")
+    return sorted(layers)
+
+
 def normalize_pass_schedule(raw: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     """Validate and normalize a token-indexed pass-count schedule.
 
@@ -188,6 +202,8 @@ class ExperimentConfig:
     memory_write_mode: str | None = None
     memory_write_stride: int | None = None
     memory_token_visibility: str | None = None
+    memory_layers: str | list[int] | None = None
+    memory_position_encoding: str | None = None
     prefix_mixin_probability: float = 0.0
     recirculation_source_layer: int | None = None
     recirculation_destination_layer: int | None = None
@@ -206,6 +222,12 @@ class ExperimentConfig:
             )
         if self.snapshot_at_tokens is not None:
             self.snapshot_at_tokens = sorted({int(value) for value in self.snapshot_at_tokens})
+        if self.variant in {"tape", "tape_add_hybrid"}:
+            self.memory_layers = _coerce_memory_layers(
+                "all" if self.memory_layers is None else self.memory_layers
+            )
+            if self.memory_position_encoding is None:
+                self.memory_position_encoding = "rope"
 
     def normalized_pass_schedule(self) -> list[dict[str, Any]]:
         return normalize_pass_schedule(self.pass_schedule)
@@ -339,12 +361,21 @@ class ExperimentConfig:
                     raise ValueError(
                         "memory_token tape requires memory_token_visibility: visible|write_only"
                     )
+            if self.memory_layers is None:
+                raise ValueError("tape configs require memory_layers")
+            self.memory_layers = _coerce_memory_layers(self.memory_layers)
+            if self.memory_position_encoding not in {"rope", "none"}:
+                raise ValueError(
+                    "tape configs require memory_position_encoding: rope|none"
+                )
         elif (
             self.memory_write_mode is not None
             or self.memory_write_stride is not None
             or self.memory_token_visibility is not None
+            or self.memory_layers is not None
+            or self.memory_position_encoding is not None
         ):
-            raise ValueError("memory_write_* fields are supported only for tape variants")
+            raise ValueError("memory_* fields are supported only for tape variants")
         if (
             not math.isfinite(float(self.prefix_mixin_probability))
             or not 0.0 <= float(self.prefix_mixin_probability) <= 1.0

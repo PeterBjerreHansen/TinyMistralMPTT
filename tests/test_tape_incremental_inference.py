@@ -27,10 +27,13 @@ def make_model(*, mode="periodic", visibility="visible", hybrid=False):
         memory_write_mode=mode,
         memory_write_stride=2,
         memory_token_visibility=visibility,
+        memory_layers=[1],
         initialization_seed=909,
     )
-    if hybrid:
-        with torch.no_grad():
+    with torch.no_grad():
+        for reader in model.memory_readers.values():
+            reader.o_proj.weight.copy_(torch.eye(model.config.hidden_size))
+        if hybrid:
             model.memory_projection.weight.copy_(0.03 * torch.eye(model.config.hidden_size))
     return model.eval()
 

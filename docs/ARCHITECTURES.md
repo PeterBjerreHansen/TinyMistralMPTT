@@ -12,7 +12,10 @@ One ordinary TinyMistral causal pass with no architecture-added parameters.
 ## FBT
 
 An independent multipass comparison based on asymmetric latent feedback. It is
-not part of the tape family.
+not part of the tape family. Later-pass fused inputs are RMS-normalized before
+entering the backbone, while position zero retains its ordinary token
+embedding. FBT implements the same exact cached K-stream and collapsed
+recurrent inference interfaces as the other one-state feedback variants.
 
 ## MemoryAdd
 
@@ -63,9 +66,8 @@ Paper-style controller-only adaptation can be configured as:
 variant: recirculation
 phase: A
 recirculation_mode: adaptive
-recirculation_source_layer: 3
-recirculation_destination_layer: 1
-recirculation_alpha: 0.1
+recirculation_source_layer: 6
+recirculation_destination_layer: 3
 ```
 
 ## Tape
@@ -76,10 +78,22 @@ recirculation_alpha: 0.1
 m = W_write h
 ```
 
-and one independent GQA tape reader per decoder layer. Every reader consumes the
-same previous-pass top-layer tape. Within a current-pass decoder layer the tape
-residual is applied after the ordinary self-attention residual and before the
-MLP.
+and one independent GQA tape reader at each configured `memory_layers` index.
+`memory_layers: all` expands to every decoder layer; `[3, 7]` is the default in
+the active experimental pipeline. Every selected reader consumes the same
+previous-pass top-layer tape. Within a selected decoder layer the tape residual
+is applied after the ordinary self-attention residual and before the MLP.
+
+Reader output projections are zero-initialized, so every pass is exact vanilla
+at construction. Q/K/V remain normally initialized and begin receiving
+gradients after an output projection has moved away from zero.
+
+Cross-attention uses sequence-anchored RoPE by default. Query rotations use the
+current linguistic sequence position and key rotations use the original write
+position; compact tape indices are never used as positions. In memory-token
+mode a control slot inherits the preceding linguistic boundary so inserting
+control computation does not inflate memory age. `memory_position_encoding:
+none` is retained only as an explicit ablation.
 
 The architecture has three write policies:
 
@@ -93,6 +107,12 @@ first available to position `t+1`.
 
 Dense and periodic C=1 are the same implementation and are required to be
 numerically identical with matching weights.
+
+For full-sequence MPS training, dense writes use the direct strict-past local
+window path because the tape is already one record per token. This avoids the
+compact-bank gather used by sparse periodic writes. It makes dense Tape faster
+than periodic-32 Tape on the development Mac, although the per-layer readers
+still make it more expensive than one-state MemoryAdd.
 
 ## TapeAddHybrid
 

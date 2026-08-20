@@ -48,6 +48,12 @@ def tape_model(
     return model
 
 
+def activate_tape_readers(model):
+    with torch.no_grad():
+        for reader in model.memory_readers.values():
+            reader.o_proj.weight.copy_(torch.eye(model.config.hidden_size))
+
+
 def test_dense_and_periodic_c1_are_the_same_tape_architecture():
     dense = tape_model(mode="dense", stride=1, seed=5).eval()
     periodic = tape_model(mode="periodic", stride=1, seed=99).eval()
@@ -60,6 +66,17 @@ def test_dense_and_periodic_c1_are_the_same_tape_architecture():
             expected = dense.compute_passes(ids, passes=passes).final.hidden_states
             actual = periodic.compute_passes(ids, passes=passes).final.hidden_states
             torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+
+
+def test_zero_initialized_tape_is_exact_vanilla_at_every_pass_depth():
+    model = tape_model(mode="periodic", stride=2).eval()
+    ids = torch.tensor([[1, 2, 3, 4, 5, 6]])
+    with torch.no_grad():
+        outputs = model.compute_passes(ids, passes=3)
+    for later in outputs.passes[1:]:
+        torch.testing.assert_close(
+            later.logits, outputs.passes[0].logits, atol=0, rtol=0
+        )
 
 
 def test_periodic_write_mask_uses_completed_stride_positions():
@@ -78,6 +95,7 @@ def test_dense_write_mask_writes_every_position():
 
 def test_periodic_write_is_strict_past():
     model = tape_model(mode="periodic", stride=4).eval()
+    activate_tape_readers(model)
     ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]])
     embeddings = model.input_embeddings(ids)
     previous = torch.randn_like(embeddings)
@@ -91,10 +109,21 @@ def test_periodic_write_is_strict_past():
     assert not torch.allclose(changed[:, 4:, :], base[:, 4:, :])
 
 
-def test_phase_a_trains_writer_and_readers_but_not_backbone():
+def test_phase_a_noop_initialization_stages_reader_then_writer_gradients():
     model = tape_model(mode="periodic")
     configure_phase(model, "A")
     ids = torch.tensor([[1, 2, 3, 4, 5, 6]])
+    optimizer = torch.optim.SGD(list(model.added_parameters()), lr=0.1)
+    output = model.compute_loss(ids, phase="A", passes=2, loss_weights=[0.0, 1.0])
+    output.loss.backward()
+    for reader in model.memory_readers.values():
+        assert reader.o_proj.weight.grad is not None
+        assert reader.o_proj.weight.grad.abs().sum() > 0
+    assert model.writer.proj.weight.grad is not None
+    assert model.writer.proj.weight.grad.abs().sum() == 0
+    optimizer.step()
+    optimizer.zero_grad(set_to_none=True)
+
     output = model.compute_loss(ids, phase="A", passes=2, loss_weights=[0.0, 1.0])
     output.loss.backward()
     assert model.writer.proj.weight.grad is not None
@@ -170,6 +199,11 @@ def test_memory_token_embedding_gets_phase_a_gradient_through_recurrence():
     configure_phase(model, "A")
     V = model.config.vocab_size
     ids = torch.tensor([[1, 2, V, 3, 4, V, 5]])
+    optimizer = torch.optim.SGD(list(model.added_parameters()), lr=0.1)
+    output = model.compute_loss(ids, phase="A", passes=2, loss_weights=[0.0, 1.0])
+    output.loss.backward()
+    optimizer.step()
+    optimizer.zero_grad(set_to_none=True)
     output = model.compute_loss(ids, phase="A", passes=2, loss_weights=[0.0, 1.0])
     output.loss.backward()
     assert model.memory_token_embedding is not None
@@ -213,6 +247,7 @@ def test_visible_mem_can_affect_later_ordinary_states_locally():
 
 def test_mem_write_is_strict_past_for_tape_reader():
     model = tape_model(mode="memory_token").eval()
+    activate_tape_readers(model)
     V = model.config.vocab_size
     ids = torch.tensor([[1, V, 3, 4]])
     embeddings = model.input_embeddings(ids)
@@ -247,17 +282,31 @@ def test_hybrid_mem_writes_tape_without_advancing_fast_state():
         tape=TapeState(
             memories=torch.zeros(1, model.memory_window, dim),
             valid=torch.zeros(1, model.memory_window, dtype=torch.bool),
+            positions=torch.zeros(1, model.memory_window, dtype=torch.long),
+            next_sequence_positions=torch.tensor([1]),
         ),
     )
     mem_hidden = torch.full((1, 1, dim), 3.0)
     updated = model._append_feedback_memory(state, mem_hidden, token=torch.tensor([[V]]), position=1)
     torch.testing.assert_close(updated.fast_hidden, old_fast, atol=0, rtol=0)
     assert updated.tape.valid.tolist() == [[True, False, False, False]]
+    assert updated.tape.positions.tolist() == [[0, 0, 0, 0]]
+    assert updated.tape.next_sequence_positions.tolist() == [1]
 
     ordinary_hidden = torch.full((1, 1, dim), 4.0)
     updated2 = model._append_feedback_memory(updated, ordinary_hidden, token=torch.tensor([[7]]), position=2)
     torch.testing.assert_close(updated2.fast_hidden, ordinary_hidden, atol=0, rtol=0)
     assert torch.equal(updated2.tape.valid, updated.tape.valid)
+    assert updated2.tape.next_sequence_positions.tolist() == [2]
+
+
+def test_memory_token_positions_track_linguistic_sequence_not_control_slots():
+    model = tape_model(mode="memory_token", stride=3)
+    V = model.config.vocab_size
+    ids = torch.tensor([[1, 2, 3, V, 4, 5, 6, V, 7]])
+    tape = model.build_tape(torch.randn(1, ids.shape[1], model.config.hidden_size), ids)
+    assert tape.query_positions.tolist() == [[0, 1, 2, 2, 3, 4, 5, 5, 6]]
+    assert tape.memory_positions[tape.valid].tolist() == [2, 5]
 
 
 def test_memory_token_packing_length_and_order():

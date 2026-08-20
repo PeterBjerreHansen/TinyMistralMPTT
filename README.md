@@ -32,13 +32,16 @@ other large execution artifacts belong under the owning study/control's `results
 
 ## Tape model
 
-All tape policies share the same identity-initialized learned writer and the
-same per-layer GQA tape readers:
+All tape policies share the same identity-initialized learned writer and GQA
+readers at configurable decoder layers. Reader outputs are zero-initialized,
+and sequence-anchored RoPE is the default:
 
 ```yaml
 variant: tape
 memory_window: 32
 memory_write_mode: dense       # dense | periodic | memory_token
+memory_layers: [3, 7]          # or: all
+memory_position_encoding: rope # default; explicit ablation: none
 ```
 
 Periodic writes additionally require `memory_write_stride`. Explicit memory
@@ -79,13 +82,12 @@ telemetry reports both linguistic tokens/s and model positions/s.
 
 ## Current research status
 
-The Stage 2 protocol remains open. No long-run core comparison is locked.
-
-The clean tape-memory development study is
-`benchmarks/development/tape_memory/`. It remains `planned` until the substrate
-and hardware gates are complete. The intended sequence is dense tape, periodic
-C4/C8/C16/C32 at W=32, selected-cadence periodic-vs-MEM ablation, then the
-selected tape against MemoryAdd and TapeAddHybrid.
+No long-run core comparison is locked. The active compute-conscious program is
+defined in `benchmarks/development/experimental_pipeline.md`: local frozen-
+backbone wiring, local Phase-B smoke tests, a resumable cloud pilot, and
+selected confirmation runs. It deliberately fixes periodic C32/W32 Tape with
+reader layers `[3, 7]` instead of spending the initial budget on spacing or
+placement sweeps.
 
 Historical benchmark results remain read-only evidence; they do not define the
 active architecture API.

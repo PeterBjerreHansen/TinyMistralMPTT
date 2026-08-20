@@ -31,6 +31,8 @@ class TapeAddHybridVariant(TapeVariant):
         memory_write_mode: str = "periodic",
         memory_write_stride: int = 8,
         memory_token_visibility: str = "visible",
+        memory_layers: str | list[int] = "all",
+        memory_position_encoding: str = "rope",
         initialization_seed: int = 4242,
     ):
         super().__init__(
@@ -39,6 +41,8 @@ class TapeAddHybridVariant(TapeVariant):
             memory_write_mode=memory_write_mode,
             memory_write_stride=memory_write_stride,
             memory_token_visibility=memory_token_visibility,
+            memory_layers=memory_layers,
+            memory_position_encoding=memory_position_encoding,
             initialization_seed=initialization_seed,
         )
         hidden_size = int(backbone.config.hidden_size)
@@ -182,6 +186,9 @@ class TapeAddHybridVariant(TapeVariant):
             past_key_values=past_key_values,
             use_cache=True,
             self_attention_mask=self.self_attention_key_mask(token),
+            query_position_ids=self._cached_query_positions(
+                feedback_memory.tape, token
+            ),
         )
         if cache is None:
             raise RuntimeError("cached TapeAddHybrid token did not return KV state")
@@ -228,8 +235,12 @@ class TapeAddHybridVariant(TapeVariant):
     ) -> HybridFeedbackState:
         if not isinstance(feedback_memory, HybridFeedbackState):
             raise TypeError("TapeAddHybrid feedback requires HybridFeedbackState")
-        trigger = self._write_trigger(token=token, position=position)
-        tape = self._append_tape(feedback_memory.tape, new_hidden, trigger=trigger)
+        tape = super()._append_feedback_memory(
+            feedback_memory.tape,
+            new_hidden,
+            token=token,
+            position=position,
+        )
         if self.uses_memory_tokens:
             if token is None:
                 raise ValueError("memory-token hybrid update requires current token")

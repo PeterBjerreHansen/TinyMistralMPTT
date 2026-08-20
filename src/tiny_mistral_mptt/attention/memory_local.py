@@ -162,6 +162,7 @@ def strict_past_tape_attention(
     window: int,
     dropout_p: float = 0.0,
     training: bool = False,
+    dense: bool = False,
 ) -> torch.Tensor:
     """O(T*W) GQA attention to the last ``W`` committed tape memories.
 
@@ -169,7 +170,10 @@ def strict_past_tape_attention(
     ``writes_before[b,t]`` is the number of records committed strictly before
     query position ``t``.  Therefore a memory written at position ``t`` is
     invisible to the query at ``t`` and first becomes visible at ``t+1``.
-    ``memory_mask`` is bool ``[B,M]`` for padded compact banks.
+    ``memory_mask`` is bool ``[B,M]`` for padded compact banks. When
+    ``dense=True``, the compact bank is known to contain exactly one record per
+    query position in chronological order, so the ordinary sliding-window
+    implementation can be used without the compact-bank gather.
     """
     if query.ndim != 4 or key.ndim != 4 or value.ndim != 4:
         raise ValueError("query/key/value must be [B,H,T,D]")
@@ -197,6 +201,20 @@ def strict_past_tape_attention(
         raise ValueError("writes_before must have integer dtype")
     if bool((writes_before < 0).any()) or bool((writes_before > memory_len).any()):
         raise ValueError("writes_before is outside compact memory-bank bounds")
+
+    if dense:
+        if memory_len != seq_len:
+            raise ValueError("dense tape attention requires one memory record per query position")
+        if not bool(memory_mask.all()):
+            raise ValueError("dense tape attention does not accept padded memory records")
+        return strict_past_local_attention(
+            query,
+            key,
+            value,
+            window=window,
+            dropout_p=dropout_p,
+            training=training,
+        )
 
     use_window = min(int(window), memory_len)
     offsets = torch.arange(use_window, device=query.device, dtype=writes_before.dtype)

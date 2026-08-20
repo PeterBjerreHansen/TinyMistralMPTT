@@ -27,6 +27,11 @@ L = sum_k w_k L_k
 `pass_schedule` independently controls the sampled pass count. Its RNG/state is
 checkpointed, so fixed or mixed K schedules resume exactly.
 
+The active compute-conscious multipass protocol samples K=2 on 90% of batches
+and K=3 on 10%. K-specific loss weights make Phase A estimate `0.9 L2 + 0.1
+L3` with only 2.1 average passes. Phase B additionally retains a first-pass
+loss. The runnable specifications live under `benchmarks/development/`.
+
 ## Parameter groups and schedules
 
 Phase B maintains separate AdamW groups for pretrained and architecture-added

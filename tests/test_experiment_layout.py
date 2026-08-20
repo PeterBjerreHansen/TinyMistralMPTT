@@ -93,9 +93,9 @@ def test_training_efficiency_defaults_to_2048_cases():
     assert {case["sequence_length"] for case in suite["cases"]} == {2048}
 
 
-def test_root_readme_keeps_stage2_protocol_pending_and_explains_config_locality():
+def test_root_readme_links_active_pipeline_and_explains_config_locality():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert "The Stage 2 protocol remains open" in readme
+    assert "benchmarks/development/experimental_pipeline.md" in readme
     assert "There is intentionally no central `configs/` directory" in readme
     assert "results/generated/" in readme
 
