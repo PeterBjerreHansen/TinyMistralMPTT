@@ -8,7 +8,14 @@ from typing import Any
 import yaml
 
 
-SUPPORTED_VARIANTS = {"vanilla", "fbt", "memory_add", "tape", "tape_add_hybrid"}
+SUPPORTED_VARIANTS = {
+    "vanilla",
+    "fbt",
+    "memory_add",
+    "recirculation",
+    "tape",
+    "tape_add_hybrid",
+}
 SUPPORTED_LR_SCHEDULES = {"constant", "cosine", "piecewise_linear"}
 SUPPORTED_AUTOCAST_DTYPES = {"bfloat16"}
 
@@ -182,6 +189,9 @@ class ExperimentConfig:
     memory_write_stride: int | None = None
     memory_token_visibility: str | None = None
     prefix_mixin_probability: float = 0.0
+    recirculation_source_layer: int | None = None
+    recirculation_destination_layer: int | None = None
+    recirculation_alpha: float = 0.1
 
     # ``resume_from`` restores the exact run. ``init_from`` loads model weights
     # only and begins a fresh trajectory/optimizer/data schedule.
@@ -270,6 +280,37 @@ class ExperimentConfig:
                 raise ValueError("snapshot_at_tokens values must lie in (0, max_unique_tokens]")
         if self.memory_window <= 0:
             raise ValueError("memory_window must be positive")
+
+        if self.variant == "recirculation":
+            if self.phase == "A":
+                raise ValueError(
+                    "basic fixed recirculation has no Phase-A parameters; use phase B"
+                )
+            if (
+                self.recirculation_source_layer is None
+                or self.recirculation_destination_layer is None
+            ):
+                raise ValueError(
+                    "recirculation requires source and destination layer fields"
+                )
+            if not (
+                0
+                <= self.recirculation_destination_layer
+                < self.recirculation_source_layer
+            ):
+                raise ValueError(
+                    "recirculation requires destination_layer < source_layer"
+                )
+            if not math.isfinite(float(self.recirculation_alpha)) or not 0.0 <= float(
+                self.recirculation_alpha
+            ) <= 1.0:
+                raise ValueError("recirculation_alpha must be finite in [0, 1]")
+        elif (
+            self.recirculation_source_layer is not None
+            or self.recirculation_destination_layer is not None
+            or self.recirculation_alpha != 0.1
+        ):
+            raise ValueError("recirculation_* fields apply only to recirculation")
 
         tape_variants = {"tape", "tape_add_hybrid"}
         if self.variant in tape_variants:

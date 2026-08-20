@@ -124,3 +124,40 @@ def test_tape_config_requires_coherent_write_policy():
 def test_tape_fields_cannot_silently_change_other_variants():
     with pytest.raises(ValueError, match="supported only for tape variants"):
         _config(variant="memory_add", memory_write_stride=4)
+
+
+def test_recirculation_config_requires_ordered_layers_and_phase_b():
+    cfg = _config(
+        variant="recirculation",
+        recirculation_source_layer=3,
+        recirculation_destination_layer=1,
+        recirculation_alpha=0.25,
+    )
+    assert cfg.recirculation_source_layer == 3
+    assert cfg.recirculation_destination_layer == 1
+    assert cfg.recirculation_alpha == 0.25
+
+    with pytest.raises(ValueError, match="requires source and destination"):
+        _config(variant="recirculation")
+    with pytest.raises(ValueError, match="destination_layer < source_layer"):
+        _config(
+            variant="recirculation",
+            recirculation_source_layer=1,
+            recirculation_destination_layer=1,
+        )
+    with pytest.raises(ValueError, match="Phase-A"):
+        _config(
+            variant="recirculation",
+            phase="A",
+            recirculation_source_layer=3,
+            recirculation_destination_layer=1,
+        )
+
+
+def test_recirculation_fields_cannot_silently_change_other_variants():
+    with pytest.raises(ValueError, match="apply only to recirculation"):
+        _config(
+            variant="memory_add",
+            recirculation_source_layer=3,
+            recirculation_destination_layer=1,
+        )

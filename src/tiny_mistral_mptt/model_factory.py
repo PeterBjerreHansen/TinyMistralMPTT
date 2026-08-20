@@ -12,6 +12,7 @@ from .variants import (
     ExperimentalVariant,
     FBTVariant,
     MemoryAddVariant,
+    RecirculationVariant,
     TapeAddHybridVariant,
     TapeVariant,
     VanillaVariant,
@@ -31,6 +32,9 @@ def build_variant(
     memory_write_stride: int | None = None,
     memory_token_visibility: str | None = None,
     prefix_mixin_probability: float = 0.0,
+    recirculation_source_layer: int | None = None,
+    recirculation_destination_layer: int | None = None,
+    recirculation_alpha: float = 0.1,
 ) -> ExperimentalVariant:
     if name == "vanilla":
         variant: ExperimentalVariant = VanillaVariant(backbone)
@@ -42,6 +46,18 @@ def build_variant(
         )
     elif name == "memory_add":
         variant = MemoryAddVariant(backbone)
+    elif name == "recirculation":
+        if recirculation_source_layer is None or recirculation_destination_layer is None:
+            raise ValueError(
+                "recirculation requires recirculation_source_layer and "
+                "recirculation_destination_layer"
+            )
+        variant = RecirculationVariant(
+            backbone,
+            source_layer=recirculation_source_layer,
+            destination_layer=recirculation_destination_layer,
+            alpha=recirculation_alpha,
+        )
     elif name in {"tape", "tape_add_hybrid"}:
         if memory_write_mode not in {"dense", "periodic", "memory_token"}:
             raise ValueError("tape variants require memory_write_mode: dense|periodic|memory_token")
@@ -96,6 +112,9 @@ def load_variant(
     memory_write_stride: int | None = None,
     memory_token_visibility: str | None = None,
     prefix_mixin_probability: float = 0.0,
+    recirculation_source_layer: int | None = None,
+    recirculation_destination_layer: int | None = None,
+    recirculation_alpha: float = 0.1,
 ) -> ExperimentalVariant:
     backbone = load_model(
         model_dir,
@@ -113,6 +132,9 @@ def load_variant(
         memory_write_stride=memory_write_stride,
         memory_token_visibility=memory_token_visibility,
         prefix_mixin_probability=prefix_mixin_probability,
+        recirculation_source_layer=recirculation_source_layer,
+        recirculation_destination_layer=recirculation_destination_layer,
+        recirculation_alpha=recirculation_alpha,
     )
 
 
@@ -133,4 +155,7 @@ def load_variant_from_config(
         memory_write_stride=cfg.memory_write_stride,
         memory_token_visibility=cfg.memory_token_visibility,
         prefix_mixin_probability=cfg.prefix_mixin_probability,
+        recirculation_source_layer=cfg.recirculation_source_layer,
+        recirculation_destination_layer=cfg.recirculation_destination_layer,
+        recirculation_alpha=cfg.recirculation_alpha,
     )

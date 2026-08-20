@@ -26,6 +26,21 @@ x_t = e_t + W_A RMSNorm(h^(k-1)_(t-1))
 `W_A` is bias-free and zero-initialized. Position zero receives a zero recurrent
 residual.
 
+## Recirculation
+
+`RecirculationVariant` captures the output of a configured source decoder
+layer and, on later passes, right-shifts it by one position before mixing it
+into an earlier destination layer. The source is L2 norm-matched to the
+destination state and combined with fixed coefficient `alpha`:
+
+```text
+h_destination <- alpha * norm_match(h_source[t-1])
+                  + (1 - alpha) * h_destination
+```
+
+The architecture has no added trainable parameters. It is a Phase-B control
+with `0 <= destination_layer < source_layer` and `alpha` in `[0, 1]`.
+
 ## Tape
 
 `TapeVariant` has one shared identity-initialized bias-free writer

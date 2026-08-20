@@ -17,6 +17,8 @@ class TapeState:
 
     memories: torch.Tensor
     valid: torch.Tensor
+    projected_keys: tuple[torch.Tensor, ...] | None = None
+    projected_values: tuple[torch.Tensor, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.memories.ndim != 3:
@@ -27,6 +29,17 @@ class TapeState:
             raise ValueError("TapeState.valid must have bool dtype")
         if self.memories.shape[1] < 1:
             raise ValueError("TapeState capacity must be positive")
+        if (self.projected_keys is None) != (self.projected_values is None):
+            raise ValueError("projected_keys and projected_values must be provided together")
+        if self.projected_keys is not None:
+            assert self.projected_values is not None
+            if len(self.projected_keys) != len(self.projected_values):
+                raise ValueError("projected K/V tuple lengths differ")
+            for key, value in zip(self.projected_keys, self.projected_values, strict=True):
+                if key.ndim != 4 or key.shape != value.shape:
+                    raise ValueError("projected K/V must have matching [B,Hkv,W,Dh] shapes")
+                if key.shape[0] != self.batch_size or key.shape[2] != self.capacity:
+                    raise ValueError("projected K/V batch/capacity mismatch")
 
     @property
     def batch_size(self) -> int:

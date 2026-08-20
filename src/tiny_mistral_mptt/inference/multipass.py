@@ -43,21 +43,24 @@ def prefill_exact(
             f"{model.variant_name} does not implement cached feedback inference"
         )
 
-    first_hidden, first_cache = model._run_first_hidden_cached(input_ids)
-    hidden_sequences = [first_hidden]
-    caches = [first_cache]
+    first_run = model._run_first_state_cached(input_ids)
+    if first_run.past_key_values is None:
+        raise RuntimeError("cached first pass did not return KV state")
+    runs = [first_run]
 
     if passes > 1:
         token_embeddings = model.input_embeddings(input_ids)
-        previous = first_hidden
+        previous = first_run.feedback_source
         for _ in range(1, passes):
-            previous, cache = model._run_feedback_hidden_cached(
+            run = model._run_feedback_state_cached(
                 input_ids,
                 token_embeddings,
                 previous,
             )
-            hidden_sequences.append(previous)
-            caches.append(cache)
+            if run.past_key_values is None:
+                raise RuntimeError("cached feedback pass did not return KV state")
+            runs.append(run)
+            previous = run.feedback_source
 
     if passes == 1:
         # K=1 is the vanilla cached boundary and must not require a variant to
@@ -65,21 +68,25 @@ def prefill_exact(
         # consumed while feedback is disabled.
         streams = (
             PassStreamState(
-                past_key_values=first_cache,
-                feedback_memory=first_hidden[:, -1:, :].detach(),
-                last_hidden=first_hidden[:, -1:, :].detach(),
+                past_key_values=first_run.past_key_values,
+                feedback_memory=first_run.feedback_source[:, -1:, :].detach(),
+                last_hidden=first_run.hidden_states[:, -1:, :].detach(),
             ),
         )
     else:
         streams = tuple(
             PassStreamState(
-                past_key_values=cache,
-                feedback_memory=model._feedback_memory_from_hidden(hidden, input_ids=input_ids),
-                last_hidden=hidden[:, -1:, :].detach(),
+                past_key_values=run.past_key_values,
+                feedback_memory=model._feedback_memory_from_hidden(
+                    run.feedback_source, input_ids=input_ids
+                ),
+                last_hidden=run.hidden_states[:, -1:, :].detach(),
             )
-            for hidden, cache in zip(hidden_sequences, caches, strict=True)
+            for run in runs
         )
-    prediction_hidden = model.prediction_hidden_after_sequence(hidden_sequences[-1], input_ids)
+    prediction_hidden = model.prediction_hidden_after_sequence(
+        runs[-1].hidden_states, input_ids
+    )
     logits = model.backbone.lm_head(prediction_hidden).float()[:, -1, :]
     return ExactIncrementalState(
         prefill_passes=passes,
@@ -140,54 +147,51 @@ def exact_decode_step(
     # until every stream has completed this token.
     position = state.next_position
     token_embedding = model.input_embeddings(token)
-    new_hiddens: list[torch.Tensor] = []
-    new_caches = []
 
-    first_hidden, first_cache = model._run_first_token_cached(
+    first_run = model._run_first_token_state_cached(
         token,
         state.streams[0].past_key_values,
     )
-    new_hiddens.append(first_hidden)
-    new_caches.append(first_cache)
+    new_runs = [first_run]
 
     for pass_index in range(1, state.prefill_passes):
-        hidden, cache = model._run_feedback_token_cached(
+        run = model._run_feedback_token_state_cached(
             token_embedding,
             state.streams[pass_index - 1].feedback_memory,
             state.streams[pass_index].past_key_values,
             token=token,
         )
-        new_hiddens.append(hidden)
-        new_caches.append(cache)
+        new_runs.append(run)
 
     if state.prefill_passes == 1:
         streams = (
             PassStreamState(
-                past_key_values=first_cache,
-                feedback_memory=first_hidden[:, -1:, :].detach(),
-                last_hidden=first_hidden[:, -1:, :].detach(),
+                past_key_values=first_run.past_key_values,
+                feedback_memory=first_run.feedback_source[:, -1:, :].detach(),
+                last_hidden=first_run.hidden_states[:, -1:, :].detach(),
             ),
         )
     else:
         streams = tuple(
             PassStreamState(
-                past_key_values=cache,
+                past_key_values=run.past_key_values,
                 feedback_memory=model._append_feedback_memory(
                     old_stream.feedback_memory,
-                    hidden,
+                    run.feedback_source,
                     token=token,
                     position=position,
                 ),
-                last_hidden=hidden[:, -1:, :].detach(),
+                last_hidden=run.hidden_states[:, -1:, :].detach(),
             )
-            for old_stream, hidden, cache in zip(
+            for old_stream, run in zip(
                 state.streams,
-                new_hiddens,
-                new_caches,
+                new_runs,
                 strict=True,
             )
         )
-    candidate_logits = model.backbone.lm_head(new_hiddens[-1][:, -1:, :]).float()[:, -1, :]
+    candidate_logits = model.backbone.lm_head(
+        new_runs[-1].hidden_states[:, -1:, :]
+    ).float()[:, -1, :]
     control = model.control_token_mask(token)[:, 0]
     logits = torch.where(control[:, None], state.next_token_logits, candidate_logits)
     return ExactIncrementalState(
@@ -209,12 +213,12 @@ def recurrent_decode_step(
 
     position = state.next_position
     if not state.feedback_enabled:
-        hidden, cache = model._run_first_token_cached(token, state.past_key_values)
+        run = model._run_first_token_state_cached(token, state.past_key_values)
         feedback_memory = None
     else:
         assert state.feedback_memory is not None
         token_embedding = model.input_embeddings(token)
-        hidden, cache = model._run_feedback_token_cached(
+        run = model._run_feedback_token_state_cached(
             token_embedding,
             state.feedback_memory,
             state.past_key_values,
@@ -222,19 +226,21 @@ def recurrent_decode_step(
         )
         feedback_memory = model._append_feedback_memory(
             state.feedback_memory,
-            hidden,
+            run.feedback_source,
             token=token,
             position=position,
         )
 
-    candidate_logits = model.backbone.lm_head(hidden[:, -1:, :]).float()[:, -1, :]
+    candidate_logits = model.backbone.lm_head(
+        run.hidden_states[:, -1:, :]
+    ).float()[:, -1, :]
     control = model.control_token_mask(token)[:, 0]
     logits = torch.where(control[:, None], state.next_token_logits, candidate_logits)
     return RecurrentState(
         prefill_passes=state.prefill_passes,
-        past_key_values=cache,
+        past_key_values=run.past_key_values,
         feedback_memory=feedback_memory,
-        last_hidden=hidden[:, -1:, :].detach(),
+        last_hidden=run.hidden_states[:, -1:, :].detach(),
         next_token_logits=logits,
     )
 

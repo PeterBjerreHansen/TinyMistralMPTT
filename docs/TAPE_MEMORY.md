@@ -17,6 +17,11 @@ tape, adds the tape residual, then performs the normalized MLP residual. The
 reader is Mistral-shaped GQA and has its own query/memory RMSNorm plus Q/K/V/O
 projections.
 
+During cached inference, each retained tape record is projected once per
+reader when it is created or appended. Subsequent cached reads project only
+the query and attend to the stored K/V tensors. The raw-memory and projected
+cache paths are required to be numerically identical.
+
 A tape record is
 
 ```text

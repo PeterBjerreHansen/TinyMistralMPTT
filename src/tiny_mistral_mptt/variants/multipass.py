@@ -12,6 +12,15 @@ from .base import ExperimentalVariant, TrainOutput
 
 
 @dataclass(frozen=True)
+class HiddenRun:
+    """Final hidden states plus the architecture-specific recurrence source."""
+
+    hidden_states: torch.Tensor
+    feedback_source: torch.Tensor
+    past_key_values: tuple[LayerKVCache, ...] | None = None
+
+
+@dataclass(frozen=True)
 class PassResult:
     hidden_states: torch.Tensor
     logits: torch.Tensor
@@ -134,6 +143,61 @@ class MultiPassVariant(ExperimentalVariant):
             raise RuntimeError("cached first-pass token did not return KV state")
         return output.last_hidden_state, output.past_key_values
 
+    # Rich state hooks preserve the legacy hidden-only API while allowing a
+    # variant to feed back an internal state, such as a source decoder layer,
+    # instead of its final normalized hidden state.
+    def _run_first_state(self, input_ids: torch.Tensor) -> HiddenRun:
+        hidden = self._run_first_hidden(input_ids)
+        return HiddenRun(hidden, hidden)
+
+    def _run_feedback_state(
+        self,
+        input_ids: torch.Tensor,
+        token_embeddings: torch.Tensor,
+        previous_source: torch.Tensor,
+    ) -> HiddenRun:
+        hidden = self._run_feedback_hidden(input_ids, token_embeddings, previous_source)
+        return HiddenRun(hidden, hidden)
+
+    def _run_first_state_cached(self, input_ids: torch.Tensor) -> HiddenRun:
+        hidden, cache = self._run_first_hidden_cached(input_ids)
+        return HiddenRun(hidden, hidden, cache)
+
+    def _run_feedback_state_cached(
+        self,
+        input_ids: torch.Tensor,
+        token_embeddings: torch.Tensor,
+        previous_source: torch.Tensor,
+    ) -> HiddenRun:
+        hidden, cache = self._run_feedback_hidden_cached(
+            input_ids, token_embeddings, previous_source
+        )
+        return HiddenRun(hidden, hidden, cache)
+
+    def _run_first_token_state_cached(
+        self,
+        input_ids: torch.Tensor,
+        past_key_values: tuple[LayerKVCache, ...],
+    ) -> HiddenRun:
+        hidden, cache = self._run_first_token_cached(input_ids, past_key_values)
+        return HiddenRun(hidden, hidden, cache)
+
+    def _run_feedback_token_state_cached(
+        self,
+        token_embedding: torch.Tensor,
+        feedback_memory,
+        past_key_values: tuple[LayerKVCache, ...],
+        *,
+        token: torch.Tensor | None = None,
+    ) -> HiddenRun:
+        hidden, cache = self._run_feedback_token_cached(
+            token_embedding,
+            feedback_memory,
+            past_key_values,
+            token=token,
+        )
+        return HiddenRun(hidden, hidden, cache)
+
     def _run_feedback_hidden(
         self,
         input_ids: torch.Tensor,
@@ -205,20 +269,21 @@ class MultiPassVariant(ExperimentalVariant):
         # that is later written/read by the recurrent pathway.
         if phase == "A" and not self.phase_a_first_pass_requires_grad():
             with torch.no_grad():
-                first_hidden = self._run_first_hidden(input_ids)
+                first_run = self._run_first_state(input_ids)
         else:
-            first_hidden = self._run_first_hidden(input_ids)
+            first_run = self._run_first_state(input_ids)
 
-        hidden_states = [first_hidden]
+        runs = [first_run]
         if passes == 1:
-            return tuple(hidden_states)
+            return tuple(run.hidden_states for run in runs)
 
         token_embeddings = self.input_embeddings(input_ids)
-        previous = first_hidden
+        previous = first_run.feedback_source
         for _ in range(1, passes):
-            previous = self._run_feedback_hidden(input_ids, token_embeddings, previous)
-            hidden_states.append(previous)
-        return tuple(hidden_states)
+            run = self._run_feedback_state(input_ids, token_embeddings, previous)
+            runs.append(run)
+            previous = run.feedback_source
+        return tuple(run.hidden_states for run in runs)
 
     def compute_passes(
         self,

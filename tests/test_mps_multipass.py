@@ -6,6 +6,7 @@ from tiny_mistral.modeling import MistralForCausalLM
 from tiny_mistral_mptt.training.phases import configure_phase
 from tiny_mistral_mptt.variants.fbt import FBTVariant
 from tiny_mistral_mptt.variants.memory_add import MemoryAddVariant
+from tiny_mistral_mptt.variants.recirculation import RecirculationVariant
 from tiny_mistral_mptt.variants.tape import TapeVariant
 
 
@@ -36,7 +37,7 @@ def test_multipass_variants_forward_backward_on_mps(variant_name):
     assert all(bool(torch.isfinite(grad).all().item()) for grad in grads)
 
 
-@pytest.mark.parametrize("variant_name", ["memory_add", "tape"])
+@pytest.mark.parametrize("variant_name", ["memory_add", "tape", "recirculation"])
 @pytest.mark.parametrize("passes", [2, 3])
 def test_incremental_memory_inference_on_mps(variant_name, passes):
     from tiny_mistral_mptt.inference import (
@@ -56,9 +57,13 @@ def test_incremental_memory_inference_on_mps(variant_name, passes):
             model.memory_projection.weight.copy_(
                 0.05 * torch.eye(config.hidden_size, device="mps")
             )
-    else:
+    elif variant_name == "tape":
         model = TapeVariant(
             backbone, memory_window=3, memory_write_mode="dense", memory_write_stride=1, initialization_seed=17
+        )
+    else:
+        model = RecirculationVariant(
+            backbone, source_layer=1, destination_layer=0, alpha=0.1
         )
     model = model.to("mps", dtype=torch.float32).eval()
     ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]], device="mps")

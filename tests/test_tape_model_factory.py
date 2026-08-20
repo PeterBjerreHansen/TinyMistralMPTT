@@ -5,6 +5,7 @@ from tiny_mistral.modeling import MistralForCausalLM
 from tiny_mistral_mptt.model_factory import build_variant
 from tiny_mistral_mptt.variants.tape import TapeVariant
 from tiny_mistral_mptt.variants.tape_add_hybrid import TapeAddHybridVariant
+from tiny_mistral_mptt.variants.recirculation import RecirculationVariant
 
 
 def backbone():
@@ -43,3 +44,16 @@ def test_factory_requires_memory_token_visibility_explicitly():
             memory_write_mode="memory_token",
             memory_write_stride=8,
         )
+
+
+def test_factory_builds_recirculation_with_explicit_layer_contract():
+    two_layer_backbone = MistralForCausalLM(
+        micro_config(num_hidden_layers=2), attention_backend="reference"
+    )
+    model = build_variant(
+        "recirculation",
+        two_layer_backbone,
+        recirculation_source_layer=1,
+        recirculation_destination_layer=0,
+    )
+    assert isinstance(model, RecirculationVariant)

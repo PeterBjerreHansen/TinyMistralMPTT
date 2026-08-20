@@ -1,14 +1,17 @@
 # Exact incremental and collapsed recurrent inference
 
-This document defines cached inference for `memory_add`, `tape`, and
-`tape_add_hybrid`. Prompt refinement depth K is an inference-time parameter and
-need not equal the K used during training.
+This document defines cached inference for `memory_add`, `recirculation`,
+`tape`, and `tape_add_hybrid`. Prompt refinement depth K is an inference-time
+parameter and need not equal the K used during training.
 
 ## Exact incremental K
 
 `exact_incremental` keeps K independent TinyMistral self-attention KV streams.
 Stream 1 is the first-pass stream. Stream `k>1` consumes strict-past feedback
-from stream `k-1` using the architecture-specific MemoryAdd/tape rule.
+from stream `k-1` using the architecture-specific MemoryAdd/recirculation/tape
+rule. Recirculation stores the source-layer state rather than the final-layer
+state, so the cached source and full-sequence source use the same layer and
+right-shift alignment.
 
 The central invariant is **snapshot before update**. At physical position t,
 every higher stream reads the lower-stream feedback state that existed before t.

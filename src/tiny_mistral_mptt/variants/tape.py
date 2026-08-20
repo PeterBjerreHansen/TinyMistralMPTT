@@ -68,6 +68,28 @@ class TapeReader(nn.Module):
             for module in (self.q_proj, self.k_proj, self.v_proj, self.o_proj):
                 nn.init.normal_(module.weight, mean=0.0, std=std)
 
+    def project_query(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        if hidden_states.ndim != 3 or hidden_states.shape[-1] != self.hidden_size:
+            raise ValueError("hidden_states must be [B,T,D] with the reader hidden size")
+        bsz, query_len, _ = hidden_states.shape
+        query = self.q_proj(self.query_norm(hidden_states))
+        return query.view(bsz, query_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+    def project_memory(
+        self, memory_states: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if memory_states.ndim != 3 or memory_states.shape[-1] != self.hidden_size:
+            raise ValueError("memory_states must be [B,M,D] with the reader hidden size")
+        bsz, memory_len, _ = memory_states.shape
+        memory = self.memory_norm(memory_states)
+        key = self.k_proj(memory).view(
+            bsz, memory_len, self.num_key_value_heads, self.head_dim
+        ).transpose(1, 2)
+        value = self.v_proj(memory).view(
+            bsz, memory_len, self.num_key_value_heads, self.head_dim
+        ).transpose(1, 2)
+        return key, value
+
     def _project(
         self,
         hidden_states: torch.Tensor,
@@ -77,29 +99,10 @@ class TapeReader(nn.Module):
             raise ValueError("hidden_states and memory_states must be [B,T,D]")
         if hidden_states.shape[0] != memory_states.shape[0]:
             raise ValueError("hidden and memory batch sizes differ")
-        if (
-            hidden_states.shape[-1] != self.hidden_size
-            or memory_states.shape[-1] != self.hidden_size
-        ):
-            raise ValueError("hidden and memory dimensions differ from reader hidden size")
-
-        bsz, query_len, _ = hidden_states.shape
-        memory_len = memory_states.shape[1]
-        query = self.q_proj(self.query_norm(hidden_states))
-        memory = self.memory_norm(memory_states)
-        key = self.k_proj(memory)
-        value = self.v_proj(memory)
-
-        query = query.view(
-            bsz, query_len, self.num_heads, self.head_dim
-        ).transpose(1, 2)
-        key = key.view(
-            bsz, memory_len, self.num_key_value_heads, self.head_dim
-        ).transpose(1, 2)
-        value = value.view(
-            bsz, memory_len, self.num_key_value_heads, self.head_dim
-        ).transpose(1, 2)
-        return query, key, value
+        return (
+            self.project_query(hidden_states),
+            *self.project_memory(memory_states),
+        )
 
     def forward(
         self, hidden_states: torch.Tensor, memory_states: torch.Tensor
@@ -131,16 +134,47 @@ class TapeReader(nn.Module):
             raise ValueError("cached Tape query must be [B,1,D]")
         if memory_states.shape[1] > self.window:
             raise ValueError("cached memory bank exceeds configured window")
-        bsz, query_len, _ = hidden_states.shape
-        query, key, value = self._project(hidden_states, memory_states)
-        output = memory_bank_attention(
-            query,
+        key, value = self.project_memory(memory_states)
+        return self.forward_projected_bank(
+            hidden_states,
             key,
             value,
+            memory_mask=memory_mask,
+        )
+
+    def forward_projected_bank(
+        self,
+        hidden_states: torch.Tensor,
+        projected_keys: torch.Tensor,
+        projected_values: torch.Tensor,
+        *,
+        memory_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Read a bank whose K/V projections were computed when it was written."""
+        if hidden_states.ndim != 3 or hidden_states.shape[-1] != self.hidden_size:
+            raise ValueError("hidden_states must be [B,T,D] with the reader hidden size")
+        if hidden_states.shape[1] != 1:
+            raise ValueError("cached Tape query must be [B,1,D]")
+        if projected_keys.ndim != 4 or projected_keys.shape != projected_values.shape:
+            raise ValueError("projected K/V must have matching [B,Hkv,M,Dh] shapes")
+        if projected_keys.shape[0] != hidden_states.shape[0]:
+            raise ValueError("hidden and projected memory batch sizes differ")
+        if projected_keys.shape[1] != self.num_key_value_heads:
+            raise ValueError("projected memory has an incompatible KV-head count")
+        if projected_keys.shape[-1] != self.head_dim:
+            raise ValueError("projected memory has an incompatible head dimension")
+        if projected_keys.shape[2] > self.window:
+            raise ValueError("cached memory bank exceeds configured window")
+        query = self.project_query(hidden_states)
+        output = memory_bank_attention(
+            query,
+            projected_keys,
+            projected_values,
             memory_mask=memory_mask,
             dropout_p=self.dropout_p,
             training=self.training,
         )
+        bsz, query_len, _ = hidden_states.shape
         output = output.transpose(1, 2).contiguous().view(bsz, query_len, -1)
         return self.o_proj(output)
 
@@ -484,9 +518,20 @@ class TapeVariant(MultiPassVariant):
                 new_caches.append(cache)
 
             if cached_bank:
-                memory_delta = memory_reader.forward_bank(
-                    hidden_states, tape.memories, memory_mask=tape.valid
-                )
+                assert isinstance(tape, TapeState)
+                if tape.projected_keys is None:
+                    memory_delta = memory_reader.forward_bank(
+                        hidden_states, tape.memories, memory_mask=tape.valid
+                    )
+                else:
+                    if tape.projected_values is None or len(tape.projected_keys) != len(self.memory_readers):
+                        raise ValueError("TapeState projected K/V does not match tape readers")
+                    memory_delta = memory_reader.forward_projected_bank(
+                        hidden_states,
+                        tape.projected_keys[layer_index],
+                        tape.projected_values[layer_index],
+                        memory_mask=tape.valid,
+                    )
             else:
                 assert isinstance(tape, TapeBatch)
                 memory_delta = memory_reader.forward_tape(
@@ -570,7 +615,23 @@ class TapeVariant(MultiPassVariant):
             if count:
                 result[batch_index, :count, :] = row
                 valid[batch_index, :count] = True
-        return TapeState(result.detach(), valid)
+        return self._project_state(result, valid)
+
+    def _project_state(
+        self, memories: torch.Tensor, valid: torch.Tensor
+    ) -> TapeState:
+        projected_keys: list[torch.Tensor] = []
+        projected_values: list[torch.Tensor] = []
+        for reader in self.memory_readers:
+            key, value = reader.project_memory(memories)
+            projected_keys.append(key.detach())
+            projected_values.append(value.detach())
+        return TapeState(
+            memories.detach(),
+            valid.detach(),
+            tuple(projected_keys),
+            tuple(projected_values),
+        )
 
     def _feedback_memory_from_hidden(
         self,
@@ -634,7 +695,37 @@ class TapeVariant(MultiPassVariant):
         candidate_valid = valid.scatter(1, write_index[:, None], torch.ones_like(trigger[:, None]))
         memories = torch.where(trigger[:, None, None], candidate_memories, memories)
         valid = torch.where(trigger[:, None], candidate_valid, valid)
-        return TapeState(memories.detach(), valid)
+        if state.projected_keys is None:
+            return self._project_state(memories, valid)
+
+        assert state.projected_values is not None
+        if len(state.projected_keys) != len(self.memory_readers):
+            raise ValueError("TapeState projected K/V does not match tape readers")
+        projected_keys: list[torch.Tensor] = []
+        projected_values: list[torch.Tensor] = []
+        for layer_index, reader in enumerate(self.memory_readers):
+            new_key, new_value = reader.project_memory(new_record)
+            old_key = state.projected_keys[layer_index].clone()
+            old_value = state.projected_values[layer_index].clone()
+            shifted_key = torch.cat((old_key[:, :, 1:, :], torch.zeros_like(old_key[:, :, :1, :])), dim=2)
+            shifted_value = torch.cat((old_value[:, :, 1:, :], torch.zeros_like(old_value[:, :, :1, :])), dim=2)
+            old_key = torch.where(full_trigger[:, None, None, None], shifted_key, old_key)
+            old_value = torch.where(full_trigger[:, None, None, None], shifted_value, old_value)
+            scatter_index = write_index[:, None, None, None].expand(
+                -1, old_key.shape[1], 1, old_key.shape[-1]
+            )
+            candidate_key = old_key.scatter(2, scatter_index, new_key)
+            candidate_value = old_value.scatter(2, scatter_index, new_value)
+            old_key = torch.where(trigger[:, None, None, None], candidate_key, old_key)
+            old_value = torch.where(trigger[:, None, None, None], candidate_value, old_value)
+            projected_keys.append(old_key.detach())
+            projected_values.append(old_value.detach())
+        return TapeState(
+            memories.detach(),
+            valid.detach(),
+            tuple(projected_keys),
+            tuple(projected_values),
+        )
 
     def _append_feedback_memory(
         self,

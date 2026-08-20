@@ -13,11 +13,12 @@ from tiny_mistral_mptt.data.manifest import file_sha256
 from tiny_mistral_mptt.data.packed_dataset import load_packed_dataset_for_experiment
 from tiny_mistral_mptt.model_factory import load_variant_from_config
 from tiny_mistral_mptt.variants.memory_add import MemoryAddVariant
+from tiny_mistral_mptt.variants.recirculation import RecirculationVariant
 from tiny_mistral_mptt.variants.tape_add_hybrid import TapeAddHybridVariant
 from tiny_mistral_mptt.variants.tape import TapeVariant
 
 
-SUPPORTED = {"memory_add", "tape", "tape_add_hybrid"}
+SUPPORTED = {"memory_add", "recirculation", "tape", "tape_add_hybrid"}
 
 
 def _nll(model, logits: torch.Tensor, ids: torch.Tensor) -> tuple[float, int]:
@@ -90,13 +91,13 @@ def main() -> None:
     cfg = load_experiment_config(args.config)
     if cfg.variant not in SUPPORTED:
         raise SystemExit(
-            "evaluate_memory_interventions requires a MemoryAdd/Tape variant"
+            "evaluate_memory_interventions requires a MemoryAdd/Recirculation/Tape variant"
         )
     device = resolve_device(cfg.device)
     model = load_variant_from_config(cfg, device=device)
     if not isinstance(
         model,
-        (MemoryAddVariant, TapeVariant, TapeAddHybridVariant),
+            (MemoryAddVariant, RecirculationVariant, TapeVariant, TapeAddHybridVariant),
     ):
         raise SystemExit("loaded model does not support memory interventions")
 
@@ -123,8 +124,11 @@ def main() -> None:
             ids = dataset.batch([index], device=device)
             mismatch_ids = dataset.batch([(index + 1) % len(dataset)], device=device)
             token_embeddings = model.input_embeddings(ids)
-            first_hidden = model._run_first_hidden(ids)
-            mismatch_hidden = model._run_first_hidden(mismatch_ids)
+            first_run = model._run_first_state(ids)
+            mismatch_run = model._run_first_state(mismatch_ids)
+            first_hidden = first_run.hidden_states
+            feedback_source = first_run.feedback_source
+            mismatch_source = mismatch_run.feedback_source
 
             baseline_logits = model.backbone.lm_head(first_hidden).float()
             loss, count = _nll(model, baseline_logits, ids)
@@ -132,7 +136,7 @@ def main() -> None:
             baseline_count += count
 
             conditions = _condition_hiddens(
-                model, ids, token_embeddings, first_hidden, mismatch_hidden
+                model, ids, token_embeddings, feedback_source, mismatch_source
             )
             for name, hidden in conditions.items():
                 values = totals.setdefault(
