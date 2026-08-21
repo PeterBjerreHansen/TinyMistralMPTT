@@ -18,6 +18,9 @@ from tiny_mistral_mptt.variants.memory_add import MemoryAddVariant
 from tiny_mistral_mptt.variants.recirculation import RecirculationVariant
 from tiny_mistral_mptt.variants.tape import TapeVariant
 from tiny_mistral_mptt.variants.tape_add_hybrid import TapeAddHybridVariant
+from tiny_mistral_mptt.variants.tape_recirculation_hybrid import (
+    TapeRecirculationHybridVariant,
+)
 
 
 def main() -> None:
@@ -53,13 +56,25 @@ def main() -> None:
         raise SystemExit("--prefill-passes values must be positive")
 
     cfg = load_experiment_config(args.config)
-    if cfg.variant not in {"memory_add", "recirculation", "tape", "tape_add_hybrid"}:
+    if cfg.variant not in {
+        "memory_add",
+        "recirculation",
+        "tape",
+        "tape_add_hybrid",
+        "tape_recirculation_hybrid",
+    }:
         raise SystemExit("evaluate_recurrent_inference requires a cached recurrent variant")
     device = resolve_device(cfg.device)
     model = load_variant_from_config(cfg, device=device)
     if not isinstance(
         model,
-        (MemoryAddVariant, RecirculationVariant, TapeVariant, TapeAddHybridVariant),
+        (
+            MemoryAddVariant,
+            RecirculationVariant,
+            TapeVariant,
+            TapeAddHybridVariant,
+            TapeRecirculationHybridVariant,
+        ),
     ):
         raise SystemExit("loaded variant does not implement recurrent memory inference")
 

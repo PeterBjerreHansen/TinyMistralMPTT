@@ -15,6 +15,7 @@ SUPPORTED_VARIANTS = {
     "recirculation",
     "tape",
     "tape_add_hybrid",
+    "tape_recirculation_hybrid",
 }
 SUPPORTED_LR_SCHEDULES = {"constant", "cosine", "piecewise_linear"}
 SUPPORTED_AUTOCAST_DTYPES = {"bfloat16"}
@@ -222,7 +223,7 @@ class ExperimentConfig:
             )
         if self.snapshot_at_tokens is not None:
             self.snapshot_at_tokens = sorted({int(value) for value in self.snapshot_at_tokens})
-        if self.variant in {"tape", "tape_add_hybrid"}:
+        if self.variant in {"tape", "tape_add_hybrid", "tape_recirculation_hybrid"}:
             self.memory_layers = _coerce_memory_layers(
                 "all" if self.memory_layers is None else self.memory_layers
             )
@@ -304,10 +305,15 @@ class ExperimentConfig:
         if self.memory_window <= 0:
             raise ValueError("memory_window must be positive")
 
-        if self.variant == "recirculation":
+        recirculation_variants = {"recirculation", "tape_recirculation_hybrid"}
+        if self.variant in recirculation_variants:
             if self.recirculation_mode not in {"fixed", "adaptive"}:
                 raise ValueError("recirculation_mode must be 'fixed' or 'adaptive'")
-            if self.phase == "A" and self.recirculation_mode == "fixed":
+            if (
+                self.variant == "recirculation"
+                and self.phase == "A"
+                and self.recirculation_mode == "fixed"
+            ):
                 raise ValueError(
                     "basic fixed recirculation has no Phase-A parameters; use phase B"
                 )
@@ -336,9 +342,11 @@ class ExperimentConfig:
             or self.recirculation_alpha != 0.1
             or self.recirculation_mode != "fixed"
         ):
-            raise ValueError("recirculation_* fields apply only to recirculation")
+            raise ValueError(
+                "recirculation_* fields apply only to recirculation variants"
+            )
 
-        tape_variants = {"tape", "tape_add_hybrid"}
+        tape_variants = {"tape", "tape_add_hybrid", "tape_recirculation_hybrid"}
         if self.variant in tape_variants:
             if self.memory_write_mode not in {"dense", "periodic", "memory_token"}:
                 raise ValueError(

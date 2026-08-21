@@ -86,9 +86,10 @@ No long-run core comparison is locked. The active compute-conscious program is
 defined in `benchmarks/development/experimental_pipeline.md`: local frozen-
 backbone wiring, local Phase-B smoke tests, a resumable cloud pilot, and
 selected confirmation runs. It deliberately fixes periodic C32/W32 Tape with
-reader layers `[3, 7]` for Hybrid, and compares dense, periodic-C32, and
-explicit-`<MEM>`-C32 Tape without a spacing or placement sweep. FBT remains in
-the implementation but is not part of this experiment program.
+reader layers `[3, 7]` for the MemoryAdd and adaptive-Recirculation hybrids,
+and compares dense, periodic-C32, and explicit-`<MEM>`-C32 Tape without a
+spacing or placement sweep. FBT remains in the implementation but is not part
+of this experiment program.
 
 Historical benchmark results remain read-only evidence; they do not define the
 active architecture API.

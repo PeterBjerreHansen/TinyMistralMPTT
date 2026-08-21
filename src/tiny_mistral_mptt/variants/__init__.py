@@ -5,6 +5,8 @@ from .multipass import HiddenRun, MultiPassResult, MultiPassVariant, PassResult,
 from .recirculation import RecirculationVariant
 from .tape import TapeBatch, TapeReader, TapeVariant, TapeWriter
 from .tape_add_hybrid import TapeAddHybridVariant
+from .tape_recirculation_hybrid import TapeRecirculationHybridVariant
+from .tape_recurrent_hybrid import TapeRecurrentHybridVariant
 from .vanilla import VanillaVariant
 
 __all__ = [
@@ -19,6 +21,8 @@ __all__ = [
     "TapeAddHybridVariant",
     "TapeBatch",
     "TapeReader",
+    "TapeRecirculationHybridVariant",
+    "TapeRecurrentHybridVariant",
     "TapeVariant",
     "TapeWriter",
     "TrainOutput",

@@ -7,6 +7,7 @@ import torch
 
 from tiny_mistral.modeling import LayerKVCache, MistralForCausalLM
 
+from ..feedback import HybridPassSource
 from ..training.loss import causal_lm_loss_from_labels, normalize_pass_weights
 from .base import ExperimentalVariant, TrainOutput
 
@@ -16,7 +17,7 @@ class HiddenRun:
     """Final hidden states plus the architecture-specific recurrence source."""
 
     hidden_states: torch.Tensor
-    feedback_source: torch.Tensor
+    feedback_source: torch.Tensor | HybridPassSource
     past_key_values: tuple[LayerKVCache, ...] | None = None
 
 

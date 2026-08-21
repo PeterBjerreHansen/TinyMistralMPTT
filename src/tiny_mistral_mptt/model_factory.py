@@ -14,6 +14,7 @@ from .variants import (
     MemoryAddVariant,
     RecirculationVariant,
     TapeAddHybridVariant,
+    TapeRecirculationHybridVariant,
     TapeVariant,
     VanillaVariant,
 )
@@ -63,7 +64,7 @@ def build_variant(
             mode=recirculation_mode,
             initialization_seed=architecture_seed,
         )
-    elif name in {"tape", "tape_add_hybrid"}:
+    elif name in {"tape", "tape_add_hybrid", "tape_recirculation_hybrid"}:
         if memory_write_mode not in {"dense", "periodic", "memory_token"}:
             raise ValueError("tape variants require memory_write_mode: dense|periodic|memory_token")
         if memory_write_mode == "dense":
@@ -96,7 +97,27 @@ def build_variant(
             memory_position_encoding=memory_position_encoding,
             initialization_seed=architecture_seed,
         )
-        variant = TapeVariant(backbone, **kwargs) if name == "tape" else TapeAddHybridVariant(backbone, **kwargs)
+        if name == "tape":
+            variant = TapeVariant(backbone, **kwargs)
+        elif name == "tape_add_hybrid":
+            variant = TapeAddHybridVariant(backbone, **kwargs)
+        else:
+            if (
+                recirculation_source_layer is None
+                or recirculation_destination_layer is None
+            ):
+                raise ValueError(
+                    "tape_recirculation_hybrid requires recirculation_source_layer "
+                    "and recirculation_destination_layer"
+                )
+            variant = TapeRecirculationHybridVariant(
+                backbone,
+                source_layer=recirculation_source_layer,
+                destination_layer=recirculation_destination_layer,
+                alpha=recirculation_alpha,
+                mode=recirculation_mode,
+                **kwargs,
+            )
     else:
         raise ValueError(f"unknown variant {name!r}")
 

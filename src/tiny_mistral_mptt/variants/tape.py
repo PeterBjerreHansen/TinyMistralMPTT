@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 import torch
@@ -342,6 +342,15 @@ class TapeBatch:
             raise ValueError("TapeBatch query positions must be non-negative")
 
 
+@dataclass(frozen=True)
+class TapeCoreRun:
+    """Decoder result with an optional internal-layer recurrence source."""
+
+    hidden_states: torch.Tensor
+    past_key_values: tuple[LayerKVCache, ...] | None
+    captured_hidden: torch.Tensor | None = None
+
+
 class TapeWriter(nn.Module):
     """Minimal learned D->D storage transform, identity-initialized."""
 
@@ -674,21 +683,23 @@ class TapeVariant(MultiPassVariant):
             raise ValueError("layer caches disagree on next absolute position")
         return next(iter(positions))
 
-    def _run_tape_feedback_core(
+    def _run_tape_core(
         self,
         token_embeddings: torch.Tensor,
-        tape: TapeBatch | TapeState,
+        tape: TapeBatch | TapeState | None,
         *,
         past_key_values: tuple[LayerKVCache, ...] | None,
         use_cache: bool,
         self_attention_mask: torch.Tensor | None = None,
         query_position_ids: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, tuple[LayerKVCache, ...] | None]:
+        post_layer: Callable[[int, torch.Tensor], torch.Tensor] | None = None,
+        capture_layer: int | None = None,
+    ) -> TapeCoreRun:
         if token_embeddings.ndim != 3:
             raise ValueError("token_embeddings must be [B,T,D]")
-        if token_embeddings.shape[0] != tape.memories.shape[0]:
+        if tape is not None and token_embeddings.shape[0] != tape.memories.shape[0]:
             raise ValueError("token and tape batch sizes differ")
-        if token_embeddings.shape[-1] != tape.memories.shape[-1]:
+        if tape is not None and token_embeddings.shape[-1] != tape.memories.shape[-1]:
             raise ValueError("token and tape hidden dimensions differ")
         cached_bank = isinstance(tape, TapeState)
         if cached_bank and token_embeddings.shape[1] != 1:
@@ -705,15 +716,18 @@ class TapeVariant(MultiPassVariant):
         )[None, :].expand(bsz, -1)
         if isinstance(tape, TapeBatch):
             memory_query_positions = tape.query_positions
-        else:
+        elif isinstance(tape, TapeState):
             if query_position_ids is None:
                 query_position_ids = tape.next_sequence_positions[:, None]
             if query_position_ids.shape != (bsz, seq_len):
                 raise ValueError("cached Tape query positions must be [B,1]")
             memory_query_positions = query_position_ids
+        else:
+            memory_query_positions = None
 
         hidden_states = token_embeddings
         new_caches: list[LayerKVCache] | None = [] if use_cache else None
+        captured_hidden: torch.Tensor | None = None
         for layer_index, layer in enumerate(self.backbone.model.layers):
             residual = hidden_states
             x = layer.input_layernorm(hidden_states)
@@ -733,7 +747,7 @@ class TapeVariant(MultiPassVariant):
                 new_caches.append(cache)
 
             reader_key = str(layer_index)
-            if reader_key in self.memory_readers:
+            if tape is not None and reader_key in self.memory_readers:
                 memory_reader = self.memory_readers[reader_key]
                 if cached_bank:
                     assert isinstance(tape, TapeState)
@@ -777,9 +791,40 @@ class TapeVariant(MultiPassVariant):
             residual = hidden_states
             x = layer.post_attention_layernorm(hidden_states)
             hidden_states = residual + layer.mlp(x)
+            if post_layer is not None:
+                hidden_states = post_layer(layer_index, hidden_states)
+            if layer_index == capture_layer:
+                captured_hidden = hidden_states
 
         hidden_states = self.backbone.model.norm(hidden_states)
-        return hidden_states, tuple(new_caches) if new_caches is not None else None
+        if capture_layer is not None and captured_hidden is None:
+            raise RuntimeError("requested recurrence source layer was not reached")
+        return TapeCoreRun(
+            hidden_states=hidden_states,
+            past_key_values=(tuple(new_caches) if new_caches is not None else None),
+            captured_hidden=captured_hidden,
+        )
+
+    def _run_tape_feedback_core(
+        self,
+        token_embeddings: torch.Tensor,
+        tape: TapeBatch | TapeState,
+        *,
+        past_key_values: tuple[LayerKVCache, ...] | None,
+        use_cache: bool,
+        self_attention_mask: torch.Tensor | None = None,
+        query_position_ids: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, tuple[LayerKVCache, ...] | None]:
+        """Compatibility wrapper for a tape-only decoder pass."""
+        run = self._run_tape_core(
+            token_embeddings,
+            tape,
+            past_key_values=past_key_values,
+            use_cache=use_cache,
+            self_attention_mask=self_attention_mask,
+            query_position_ids=query_position_ids,
+        )
+        return run.hidden_states, run.past_key_values
 
     def _run_feedback_hidden(
         self,

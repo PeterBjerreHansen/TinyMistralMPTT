@@ -193,7 +193,11 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
     if memory_token_visibility is not None:
         memory_token_visibility = str(memory_token_visibility)
 
-    is_tape = variant in {"tape", "tape_add_hybrid"}
+    is_tape = variant in {
+        "tape",
+        "tape_add_hybrid",
+        "tape_recirculation_hybrid",
+    }
     if is_tape:
         if memory_write_mode not in {"dense", "periodic", "memory_token"}:
             raise ValueError("tape efficiency cases require memory_write_mode: dense|periodic|memory_token")

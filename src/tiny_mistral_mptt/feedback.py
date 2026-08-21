@@ -72,8 +72,27 @@ class TapeState:
 
 
 @dataclass(frozen=True)
+class HybridPassSource:
+    """Full-stream sources produced by one tape/recurrent model pass."""
+
+    recurrent_hidden: torch.Tensor
+    tape_hidden: torch.Tensor
+
+    def __post_init__(self) -> None:
+        if self.recurrent_hidden.ndim != 3 or self.tape_hidden.ndim != 3:
+            raise ValueError("hybrid pass sources must be [B,T,D]")
+        if self.recurrent_hidden.shape != self.tape_hidden.shape:
+            raise ValueError("hybrid recurrent/tape pass sources must have equal shapes")
+
+
+@dataclass(frozen=True)
 class HybridFeedbackState:
-    """Immediate MemoryAdd state plus a addressable tape."""
+    """Immediate recurrent state plus an addressable tape.
+
+    ``fast_hidden`` retains its original name for checkpoint/API compatibility;
+    it may contain either a top-layer MemoryAdd state or an internal-layer
+    recirculation source.
+    """
 
     fast_hidden: torch.Tensor
     tape: TapeState
@@ -93,6 +112,10 @@ class HybridFeedbackState:
     @property
     def hidden_size(self) -> int:
         return int(self.fast_hidden.shape[-1])
+
+    @property
+    def recurrent_hidden(self) -> torch.Tensor:
+        return self.fast_hidden
 
 
 FeedbackMemory = torch.Tensor | TapeState | HybridFeedbackState

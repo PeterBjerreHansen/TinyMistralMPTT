@@ -13,7 +13,8 @@ rate of `1e-4`.
 
 Use `--arm <id>` to run one arm. Generated checkpoints and metrics live below
 `results/generated/` and are ignored by Git. Tape is wired separately for
-dense, periodic-C32, and write-only explicit-`<MEM>`-C32 writes.
+dense, periodic-C32, and write-only explicit-`<MEM>`-C32 writes. The periodic
+hybrid is wired once with MemoryAdd and once with adaptive Recirculation.
 
 These local configs keep only the newest checkpoint generation. Copy completed
 wiring checkpoints to durable storage before removing local run directories.

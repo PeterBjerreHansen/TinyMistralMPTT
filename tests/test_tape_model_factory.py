@@ -5,6 +5,9 @@ from tiny_mistral.modeling import MistralForCausalLM
 from tiny_mistral_mptt.model_factory import build_variant
 from tiny_mistral_mptt.variants.tape import TapeVariant
 from tiny_mistral_mptt.variants.tape_add_hybrid import TapeAddHybridVariant
+from tiny_mistral_mptt.variants.tape_recirculation_hybrid import (
+    TapeRecirculationHybridVariant,
+)
 from tiny_mistral_mptt.variants.recirculation import RecirculationVariant
 
 
@@ -97,3 +100,21 @@ def test_factory_builds_recirculation_with_explicit_layer_contract():
     assert isinstance(adaptive, RecirculationVariant)
     assert adaptive.mode == "adaptive"
     assert list(adaptive.added_parameters())
+
+
+def test_factory_builds_adaptive_tape_recirculation_hybrid():
+    model = build_variant(
+        "tape_recirculation_hybrid",
+        MistralForCausalLM(
+            micro_config(num_hidden_layers=3), attention_backend="reference"
+        ),
+        memory_write_mode="periodic",
+        memory_write_stride=8,
+        memory_layers=[1],
+        recirculation_source_layer=2,
+        recirculation_destination_layer=0,
+        recirculation_mode="adaptive",
+    )
+    assert isinstance(model, TapeRecirculationHybridVariant)
+    assert model.mode == "adaptive"
+    assert model.memory_layers == (1,)

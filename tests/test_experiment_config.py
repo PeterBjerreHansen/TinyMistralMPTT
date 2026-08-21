@@ -212,6 +212,28 @@ def test_adaptive_recirculation_adds_a_phase_a_controller():
         )
 
 
+def test_tape_recirculation_hybrid_requires_both_configuration_contracts():
+    cfg = _config(
+        variant="tape_recirculation_hybrid",
+        phase="A",
+        memory_write_mode="periodic",
+        memory_write_stride=32,
+        memory_layers=[3, 7],
+        recirculation_mode="adaptive",
+        recirculation_source_layer=6,
+        recirculation_destination_layer=3,
+    )
+    assert cfg.memory_position_encoding == "rope"
+    assert cfg.recirculation_mode == "adaptive"
+
+    with pytest.raises(ValueError, match="requires source and destination"):
+        _config(
+            variant="tape_recirculation_hybrid",
+            memory_write_mode="periodic",
+            memory_write_stride=32,
+        )
+
+
 def test_recirculation_fields_cannot_silently_change_other_variants():
     with pytest.raises(ValueError, match="apply only to recirculation"):
         _config(

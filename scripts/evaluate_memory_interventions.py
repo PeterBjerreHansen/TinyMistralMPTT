@@ -12,13 +12,26 @@ from tiny_mistral_mptt.config import load_experiment_config
 from tiny_mistral_mptt.data.manifest import file_sha256
 from tiny_mistral_mptt.data.packed_dataset import load_packed_dataset_for_experiment
 from tiny_mistral_mptt.model_factory import load_variant_from_config
+from tiny_mistral_mptt.feedback import HybridPassSource
 from tiny_mistral_mptt.variants.memory_add import MemoryAddVariant
 from tiny_mistral_mptt.variants.recirculation import RecirculationVariant
 from tiny_mistral_mptt.variants.tape_add_hybrid import TapeAddHybridVariant
+from tiny_mistral_mptt.variants.tape_recirculation_hybrid import (
+    TapeRecirculationHybridVariant,
+)
+from tiny_mistral_mptt.variants.tape_recurrent_hybrid import (
+    TapeRecurrentHybridVariant,
+)
 from tiny_mistral_mptt.variants.tape import TapeVariant
 
 
-SUPPORTED = {"memory_add", "recirculation", "tape", "tape_add_hybrid"}
+SUPPORTED = {
+    "memory_add",
+    "recirculation",
+    "tape",
+    "tape_add_hybrid",
+    "tape_recirculation_hybrid",
+}
 
 
 def _nll(model, logits: torch.Tensor, ids: torch.Tensor) -> tuple[float, int]:
@@ -41,34 +54,46 @@ def _condition_hiddens(
     model,
     ids: torch.Tensor,
     token_embeddings: torch.Tensor,
-    real: torch.Tensor,
-    mismatch: torch.Tensor,
+    real: torch.Tensor | HybridPassSource,
+    mismatch: torch.Tensor | HybridPassSource,
 ) -> dict[str, torch.Tensor]:
-    zero = torch.zeros_like(real)
-    if isinstance(model, TapeAddHybridVariant):
+    if isinstance(model, TapeRecurrentHybridVariant):
+        if not isinstance(real, HybridPassSource) or not isinstance(
+            mismatch, HybridPassSource
+        ):
+            raise TypeError("hybrid intervention requires HybridPassSource")
+        zero_recurrent = torch.zeros_like(real.recurrent_hidden)
+        zero_tape = torch.zeros_like(real.tape_hidden)
+
+        def run(recurrent_hidden, tape_hidden):
+            source = HybridPassSource(recurrent_hidden, tape_hidden)
+            return model._run_feedback_state(
+                ids, token_embeddings, source
+            ).hidden_states
+
+        recurrent_label = "fast" if isinstance(model, TapeAddHybridVariant) else "recurrent"
         return {
-            "real_memory": model._run_feedback_hidden_components(
-                ids, token_embeddings, fast_hidden=real, tape_hidden=real
+            "real_memory": run(real.recurrent_hidden, real.tape_hidden),
+            "zero_memory": run(zero_recurrent, zero_tape),
+            "mismatched_memory": run(
+                mismatch.recurrent_hidden, mismatch.tape_hidden
             ),
-            "zero_memory": model._run_feedback_hidden_components(
-                ids, token_embeddings, fast_hidden=zero, tape_hidden=zero
+            f"zero_{recurrent_label}_real_tape": run(
+                zero_recurrent, real.tape_hidden
             ),
-            "mismatched_memory": model._run_feedback_hidden_components(
-                ids, token_embeddings, fast_hidden=mismatch, tape_hidden=mismatch
+            f"mismatched_{recurrent_label}_real_tape": run(
+                mismatch.recurrent_hidden, real.tape_hidden
             ),
-            "zero_fast_real_tape": model._run_feedback_hidden_components(
-                ids, token_embeddings, fast_hidden=zero, tape_hidden=real
+            f"real_{recurrent_label}_zero_tape": run(
+                real.recurrent_hidden, zero_tape
             ),
-            "mismatched_fast_real_tape": model._run_feedback_hidden_components(
-                ids, token_embeddings, fast_hidden=mismatch, tape_hidden=real
-            ),
-            "real_fast_zero_tape": model._run_feedback_hidden_components(
-                ids, token_embeddings, fast_hidden=real, tape_hidden=zero
-            ),
-            "real_fast_mismatched_tape": model._run_feedback_hidden_components(
-                ids, token_embeddings, fast_hidden=real, tape_hidden=mismatch
+            f"real_{recurrent_label}_mismatched_tape": run(
+                real.recurrent_hidden, mismatch.tape_hidden
             ),
         }
+    if not isinstance(real, torch.Tensor) or not isinstance(mismatch, torch.Tensor):
+        raise TypeError("non-hybrid intervention requires tensor feedback sources")
+    zero = torch.zeros_like(real)
     return {
         "real_memory": model._run_feedback_hidden(ids, token_embeddings, real),
         "zero_memory": model._run_feedback_hidden(ids, token_embeddings, zero),
@@ -97,7 +122,13 @@ def main() -> None:
     model = load_variant_from_config(cfg, device=device)
     if not isinstance(
         model,
-            (MemoryAddVariant, RecirculationVariant, TapeVariant, TapeAddHybridVariant),
+            (
+                MemoryAddVariant,
+                RecirculationVariant,
+                TapeVariant,
+                TapeAddHybridVariant,
+                TapeRecirculationHybridVariant,
+            ),
     ):
         raise SystemExit("loaded model does not support memory interventions")
 

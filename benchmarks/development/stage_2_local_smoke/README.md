@@ -9,4 +9,5 @@ uv run python scripts/run_study.py \
 
 These 1M-token runs are integration gates, not final comparisons. Dense,
 periodic-C32, and write-only explicit-`<MEM>`-C32 Tape each have their own arm.
-All local arms keep only the newest checkpoint generation.
+MemoryAdd–Tape and Recirculation–Tape also have separate arms. All local arms
+keep only the newest checkpoint generation.

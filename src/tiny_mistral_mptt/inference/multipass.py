@@ -69,7 +69,7 @@ def prefill_exact(
         streams = (
             PassStreamState(
                 past_key_values=first_run.past_key_values,
-                feedback_memory=first_run.feedback_source[:, -1:, :].detach(),
+                feedback_memory=first_run.hidden_states[:, -1:, :].detach(),
                 last_hidden=first_run.hidden_states[:, -1:, :].detach(),
             ),
         )
@@ -167,7 +167,7 @@ def exact_decode_step(
         streams = (
             PassStreamState(
                 past_key_values=first_run.past_key_values,
-                feedback_memory=first_run.feedback_source[:, -1:, :].detach(),
+                feedback_memory=first_run.hidden_states[:, -1:, :].detach(),
                 last_hidden=first_run.hidden_states[:, -1:, :].detach(),
             ),
         )

@@ -17,12 +17,13 @@ sequence-anchored RoPE, an identity-initialized writer, and zero-initialized
 reader output projections. The three write policies are dense, periodic C32,
 and explicit-memory-token C32. The explicit `<MEM>` arm uses `write_only`
 visibility so the control position can affect later tokens only through Tape.
-Hybrid uses periodic C32 Tape. The locked adaptive Recirculation placement is
-source layer 6 to destination layer 3. Layer indices are zero-based. These are
+Both hybrids use periodic C32 Tape. One uses MemoryAdd as its fast channel; the
+other uses adaptive Recirculation. The locked Recirculation placement is source
+layer 6 to destination layer 3. Layer indices are zero-based. These are
 good-enough defaults, not claims of optimal spacing or placement.
 
 FBT remains implemented and covered by architecture correctness tests, but it
-is benched from this experimental program: no wiring, smoke, cloud, or
+is excluded from this experimental program: no wiring, smoke, cloud, or
 confirmation run is scheduled.
 
 ## Shared pass protocol
@@ -81,10 +82,10 @@ projections move away from zero.
 Directory: `stage_2_local_smoke/`.
 
 Initialize from the canonical Stage-1 checkpoints and train MemoryAdd, adaptive
-Recirculation, all three Tape policies, and Hybrid for 1M tokens with the full
-backbone differentiable. This stage checks stability and integration only. It
-is not a final model comparison. These local configs also retain one checkpoint
-generation.
+Recirculation, all three Tape policies, MemoryAdd–Tape, and
+Recirculation–Tape for 1M tokens with the full backbone differentiable. This
+stage checks stability and integration only. It is not a final model
+comparison. These local configs also retain one checkpoint generation.
 
 Do not proceed with a model that has non-finite gradients, persistent pass-2
 regression, K=3 collapse, or recurrent continuation failure.
@@ -105,26 +106,29 @@ the shared held-out validation split.
 Before paid execution, run CUDA qualification and change hardware batch fields
 only if the same change is applied to all directly compared arms. Record
 linguistic tokens/s, pass-position compute, peak VRAM, instance runtime, and
-dollars. The first 5M pilot includes seven arms: Vanilla, MemoryAdd, adaptive
+dollars. The first 5M pilot includes eight arms: Vanilla, MemoryAdd, adaptive
 Recirculation, dense Tape, periodic-C32 Tape, explicit-`<MEM>`-C32 Tape, and
-periodic-C32 Hybrid. Cloud configs retain two checkpoint generations.
+both periodic-C32 hybrids. Cloud configs retain two checkpoint generations.
 
 At the 5M gate, run pass-depth, recurrent-inference, and memory-intervention
 diagnostics. Each Tape policy is analyzed independently. A Tape policy is
 eligible for promotion only if real Tape performs better than its zero or
 mismatched-memory interventions on at least one long-range measure. Promote at
 most one Tape policy, using the predeclared long-range result first and cost as
-the tie-breaker. Hybrid is promoted for the slow-memory claim only if its real
-Tape channel improves over the fast-only intervention.
+the tie-breaker. At most one hybrid is promoted. A hybrid is eligible for the
+slow-memory claim only if its real Tape channel improves over its
+recurrent-only intervention; choose between eligible hybrids using the
+predeclared long-range result and then cost.
 
 ## Stage 4: selected confirmation
 
 Directory: `stage_4_confirmation/`.
 
 Resume the promoted Stage-3 seed to 10M. Then execute the two additional-seed
-candidate configs only for Vanilla, the selected Tape policy, Hybrid, and the
-selected fast-memory baseline. The preparation command takes both selections,
-so no execution settings need to be edited after observing pilot results.
+candidate configs only for Vanilla, the selected Tape policy, the selected
+hybrid, and the selected fast-memory baseline. The preparation command takes
+all three selections, so no execution settings need to be edited after
+observing pilot results.
 
 The primary evaluation uses at least 256 fixed validation blocks, controlled
 retrieval/state-tracking lags of 32 through 1024, K=1 through K=8 pass-depth
@@ -145,12 +149,12 @@ The $50 cloud ceiling is allocated before execution:
 | Use | Maximum spend |
 | --- | ---: |
 | CUDA memory/throughput qualification | $3 |
-| Seven-arm 5M pilot | $12 |
-| Promoted seed-1337 continuation and two additional seeds | $26 |
+| Eight-arm 5M pilot | $14 |
+| Promoted seed-1337 continuation and two additional seeds | $24 |
 | Final diagnostics | $4 |
 | Storage, interruption, and rerun reserve | $5 |
 
 After qualification, record cost per million linguistic tokens from measured
-throughput and shorten confirmation endpoints uniformly if the $26 ceiling
+throughput and shorten confirmation endpoints uniformly if the $24 ceiling
 would be exceeded. A failed or interrupted pilot does not borrow from the
 reserve without an explicit decision recorded in the Stage-3 results notes.

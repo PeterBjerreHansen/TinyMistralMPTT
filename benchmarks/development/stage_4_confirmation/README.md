@@ -9,15 +9,15 @@ uv run python scripts/run_study.py \
   --arm hybrid_seed1337 --arm memory_add_seed1337
 ```
 
-The command shows periodic Tape and MemoryAdd as an example; replace those two
-arm IDs with the selections recorded at the Stage-3 gate.
+The command shows periodic Tape, MemoryAdd recurrence, and the MemoryAdd hybrid
+as an example; replace all selected arm IDs with the Stage-3 gate decisions.
 
-Then materialize the two additional-seed study. Choose the fast baseline using
-the Stage-3 gate:
+Then materialize the two additional-seed study. Choose the fast baseline and
+hybrid using the Stage-3 gate:
 
 ```bash
 uv run python benchmarks/development/stage_4_confirmation/prepare.py \
-  --fast memory_add --tape periodic32
+  --fast memory_add --tape periodic32 --hybrid recirculation
 uv run python scripts/verify_study.py \
   benchmarks/development/stage_4_confirmation
 uv run python scripts/run_study.py \
@@ -25,6 +25,7 @@ uv run python scripts/run_study.py \
 ```
 
 `--fast` accepts `memory_add` or `recirculation_adaptive`; `--tape` accepts
-`dense`, `periodic32`, or `memory_token32`. Preparation fails rather than
+`dense`, `periodic32`, or `memory_token32`; `--hybrid` accepts `memory_add` or
+`recirculation` and defaults to `memory_add`. Preparation fails rather than
 overwriting an existing selection; pass `--force` only when deliberately
 replacing a study that has not begun execution.

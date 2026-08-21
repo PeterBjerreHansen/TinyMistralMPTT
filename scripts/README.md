@@ -65,7 +65,7 @@ load time.
 
 Pass-depth, memory interventions, and recurrent-inference scripts are reusable
 checkpoint diagnostics. `evaluate_memory_interventions.py` can independently
-intervene on TapeAddHybrid's fast MemoryAdd source and slow tape source.
+intervene on either hybrid's recurrent source and slow tape source.
 
 Public `generate.py`/model generation remain ordinary language generation. The
 low-level recurrent API can consume explicit MEM control steps, but no sampler
