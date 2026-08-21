@@ -25,6 +25,8 @@ class TapeRecurrentHybridVariant(TapeVariant, ABC):
     the same tape implementation and differ only in their fast routing rule.
     """
 
+    supports_recurrent_nmp = True
+
     def __init__(
         self,
         backbone: MistralForCausalLM,

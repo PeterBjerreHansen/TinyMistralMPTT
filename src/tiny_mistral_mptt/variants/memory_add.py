@@ -28,6 +28,7 @@ class MemoryAddVariant(MultiPassVariant):
 
     variant_name = "memory_add"
     supports_cached_feedback = True
+    supports_recurrent_nmp = True
 
     def __init__(self, backbone: MistralForCausalLM):
         super().__init__(backbone)
@@ -43,6 +44,7 @@ class MemoryAddVariant(MultiPassVariant):
             nn.init.zeros_(self.memory_projection.weight)
 
     def added_parameters(self) -> Iterable[nn.Parameter]:
+        yield from super().added_parameters()
         yield from self.memory_norm.parameters()
         yield from self.memory_projection.parameters()
 

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+import math
 
 import torch
 
 from tiny_mistral.modeling import LayerKVCache, MistralForCausalLM
 
 from ..feedback import HybridPassSource
+from ..nmp import LatentPredictionHead, recurrent_nmp_pass_loss, tape_nmp_pass_loss
 from ..training.loss import causal_lm_loss_from_labels, normalize_pass_weights
 from .base import ExperimentalVariant, TrainOutput
 
@@ -62,10 +64,99 @@ class MultiPassVariant(ExperimentalVariant):
     """
 
     supports_cached_feedback = False
+    supports_recurrent_nmp = False
+    supports_tape_nmp = False
 
     def __init__(self, backbone: MistralForCausalLM):
         super().__init__()
         self.backbone = backbone
+        # Keeping disabled heads as None preserves historical state_dicts
+        # exactly. configure_nmp creates only objectives with non-zero weight.
+        self.recurrent_nmp_predictor: LatentPredictionHead | None = None
+        self.tape_nmp_predictor: LatentPredictionHead | None = None
+        self.recurrent_nmp_weight = 0.0
+        self.tape_nmp_weight = 0.0
+
+    def configure_nmp(
+        self,
+        *,
+        recurrent_weight: float,
+        tape_weight: float,
+        projection_factor: float,
+        initialization_seed: int,
+    ) -> None:
+        if (
+            self.recurrent_nmp_predictor is not None
+            or self.tape_nmp_predictor is not None
+        ):
+            raise RuntimeError("NMP predictors have already been configured")
+        for name, value in (
+            ("recurrent_weight", recurrent_weight),
+            ("tape_weight", tape_weight),
+        ):
+            if (
+                not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or value < 0
+            ):
+                raise ValueError(f"{name} must be finite and non-negative")
+        if recurrent_weight and not self.supports_recurrent_nmp:
+            raise ValueError(f"{self.variant_name} does not expose a recurrent NMP target")
+        if tape_weight and not self.supports_tape_nmp:
+            raise ValueError(f"{self.variant_name} does not expose a tape NMP target")
+        hidden_size = int(self.config.hidden_size)
+        kwargs = {
+            "hidden_size": hidden_size,
+            "projection_factor": float(projection_factor),
+            "rms_norm_eps": float(self.config.rms_norm_eps),
+        }
+        if recurrent_weight:
+            self.recurrent_nmp_predictor = LatentPredictionHead(
+                **kwargs, initialization_seed=int(initialization_seed) + 100_003
+            )
+        if tape_weight:
+            self.tape_nmp_predictor = LatentPredictionHead(
+                **kwargs, initialization_seed=int(initialization_seed) + 200_003
+            )
+        self.recurrent_nmp_weight = float(recurrent_weight)
+        self.tape_nmp_weight = float(tape_weight)
+
+    def added_parameters(self):
+        if self.recurrent_nmp_predictor is not None:
+            yield from self.recurrent_nmp_predictor.parameters()
+        if self.tape_nmp_predictor is not None:
+            yield from self.tape_nmp_predictor.parameters()
+
+    def initialization_only_state_prefixes(self) -> tuple[str, ...]:
+        """State prefixes allowed to be absent from an ``init_from`` checkpoint."""
+        prefixes: list[str] = []
+        if self.recurrent_nmp_predictor is not None:
+            prefixes.append("recurrent_nmp_predictor.")
+        if self.tape_nmp_predictor is not None:
+            prefixes.append("tape_nmp_predictor.")
+        return tuple(prefixes)
+
+    @staticmethod
+    def _source_component(run: HiddenRun, component: str) -> torch.Tensor:
+        source = run.feedback_source
+        if isinstance(source, HybridPassSource):
+            return (
+                source.recurrent_hidden
+                if component == "recurrent"
+                else source.tape_hidden
+            )
+        if component == "recurrent":
+            return source
+        return run.hidden_states
+
+    def nmp_written_states(self, final_tape_source: torch.Tensor) -> torch.Tensor:
+        raise RuntimeError(f"{self.variant_name} does not implement tape NMP writes")
+
+    def nmp_write_mask(self, input_ids: torch.Tensor) -> torch.Tensor:
+        raise RuntimeError(f"{self.variant_name} does not implement a tape write policy")
+
+    def nmp_sequence_positions(self, input_ids: torch.Tensor) -> torch.Tensor:
+        raise RuntimeError(f"{self.variant_name} does not implement tape positions")
 
     @property
     def config(self):
@@ -247,13 +338,13 @@ class MultiPassVariant(ExperimentalVariant):
         """Append one newly produced stream state to its retained feedback memory."""
         raise NotImplementedError
 
-    def _run_hidden_passes(
+    def _run_passes(
         self,
         input_ids: torch.Tensor,
         *,
         passes: int,
         phase: str,
-    ) -> tuple[torch.Tensor, ...]:
+    ) -> tuple[HiddenRun, ...]:
         if input_ids.ndim != 2 or input_ids.shape[1] < 2:
             raise ValueError("input_ids must be [B,T] with at least two tokens")
         if passes < 1:
@@ -276,7 +367,7 @@ class MultiPassVariant(ExperimentalVariant):
 
         runs = [first_run]
         if passes == 1:
-            return tuple(run.hidden_states for run in runs)
+            return tuple(runs)
 
         token_embeddings = self.input_embeddings(input_ids)
         previous = first_run.feedback_source
@@ -284,7 +375,20 @@ class MultiPassVariant(ExperimentalVariant):
             run = self._run_feedback_state(input_ids, token_embeddings, previous)
             runs.append(run)
             previous = run.feedback_source
-        return tuple(run.hidden_states for run in runs)
+        return tuple(runs)
+
+    def _run_hidden_passes(
+        self,
+        input_ids: torch.Tensor,
+        *,
+        passes: int,
+        phase: str,
+    ) -> tuple[torch.Tensor, ...]:
+        """Compatibility view retained for callers that need only top states."""
+        return tuple(
+            run.hidden_states
+            for run in self._run_passes(input_ids, passes=passes, phase=phase)
+        )
 
     def compute_passes(
         self,
@@ -310,8 +414,12 @@ class MultiPassVariant(ExperimentalVariant):
         phase: str = "B",
         passes: int = 1,
         loss_weights: Sequence[float] | None = None,
+        nmp_weight_scale: float = 1.0,
     ) -> TrainOutput:
-        hidden_states = self._run_hidden_passes(input_ids, passes=passes, phase=phase)
+        if not 0.0 <= float(nmp_weight_scale) <= 1.0:
+            raise ValueError("nmp_weight_scale must lie in [0,1]")
+        runs = self._run_passes(input_ids, passes=passes, phase=phase)
+        hidden_states = tuple(run.hidden_states for run in runs)
         pass_losses: list[torch.Tensor] = []
         for hidden in hidden_states:
             logits = self.backbone.lm_head(hidden).float()
@@ -337,6 +445,91 @@ class MultiPassVariant(ExperimentalVariant):
                 for index, weight in enumerate(weights)
             }
         )
+        auxiliary_loss = loss.new_zeros(())
+        ordinary_mask = ~self.control_token_mask(input_ids)
+
+        if self.recurrent_nmp_predictor is not None:
+            final_target = self._source_component(runs[-1], "recurrent").detach()
+            nmp_losses: list[torch.Tensor] = []
+            target_rms = target_std = None
+            for index, run in enumerate(runs):
+                # The predictor sees only h_t. No token embedding or x_{t+1}
+                # exists anywhere on this branch.
+                prediction = self.recurrent_nmp_predictor(run.hidden_states)
+                nmp_loss, target_rms, target_std = recurrent_nmp_pass_loss(
+                    prediction,
+                    final_targets=final_target,
+                    ordinary_mask=ordinary_mask,
+                )
+                nmp_losses.append(nmp_loss)
+                metrics[f"recurrent_nmp_pass_{index + 1}_loss"] = float(
+                    nmp_loss.detach().cpu()
+                )
+            raw = torch.stack(nmp_losses).mean()
+            weighted = raw * self.recurrent_nmp_weight * float(nmp_weight_scale)
+            auxiliary_loss = auxiliary_loss + weighted
+            metrics.update(
+                {
+                    "recurrent_nmp_loss": float(raw.detach().cpu()),
+                    "recurrent_nmp_weighted_loss": float(weighted.detach().cpu()),
+                    "recurrent_nmp_target_rms": float(target_rms.detach().cpu()),
+                    "recurrent_nmp_target_feature_std": float(target_std.detach().cpu()),
+                }
+            )
+
+        if self.tape_nmp_predictor is not None:
+            final_tape_source = self._source_component(runs[-1], "tape")
+            # Stop-gradient covers both the final source and the writer target
+            # branch. The same writer can still receive gradients through any
+            # memories that causally contributed to run.hidden_states.
+            with torch.no_grad():
+                written_targets = self.nmp_written_states(final_tape_source).detach()
+            write_mask = self.nmp_write_mask(input_ids)
+            sequence_positions = self.nmp_sequence_positions(input_ids)
+            nmp_losses = []
+            distance_sums: dict[str, list[torch.Tensor]] = {}
+            target_rms = target_std = None
+            for index, run in enumerate(runs):
+                prediction = self.tape_nmp_predictor(run.hidden_states)
+                nmp_loss, target_rms, target_std, distances = tape_nmp_pass_loss(
+                    prediction,
+                    final_written_states=written_targets,
+                    ordinary_mask=ordinary_mask,
+                    write_mask=write_mask,
+                    sequence_positions=sequence_positions,
+                )
+                nmp_losses.append(nmp_loss)
+                metrics[f"tape_nmp_pass_{index + 1}_loss"] = float(
+                    nmp_loss.detach().cpu()
+                )
+                for name, value in distances.items():
+                    distance_sums.setdefault(name, []).append(value)
+                    metrics[
+                        f"tape_nmp_pass_{index + 1}_distance_{name}_loss"
+                    ] = float(value.detach().cpu())
+            raw = torch.stack(nmp_losses).mean()
+            weighted = raw * self.tape_nmp_weight * float(nmp_weight_scale)
+            auxiliary_loss = auxiliary_loss + weighted
+            metrics.update(
+                {
+                    "tape_nmp_loss": float(raw.detach().cpu()),
+                    "tape_nmp_weighted_loss": float(weighted.detach().cpu()),
+                    "tape_nmp_target_rms": float(target_rms.detach().cpu()),
+                    "tape_nmp_target_feature_std": float(target_std.detach().cpu()),
+                }
+            )
+            for name, values in distance_sums.items():
+                metrics[f"tape_nmp_distance_{name}_loss"] = float(
+                    torch.stack(values).mean().detach().cpu()
+                )
+
+        if (
+            self.recurrent_nmp_predictor is not None
+            or self.tape_nmp_predictor is not None
+        ):
+            metrics["nmp_weight_scale"] = float(nmp_weight_scale)
+            metrics["ntp_loss"] = float(loss.detach().cpu())
+        loss = loss + auxiliary_loss
         return TrainOutput(
             loss=loss,
             pass_losses=tuple(pass_losses),

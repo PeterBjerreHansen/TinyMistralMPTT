@@ -31,7 +31,9 @@ class VanillaVariant(ExperimentalVariant):
         phase: str = "B",
         passes: int = 1,
         loss_weights: Sequence[float] | None = None,
+        nmp_weight_scale: float = 1.0,
     ) -> TrainOutput:
+        del nmp_weight_scale
         if phase not in {"A", "B"}:
             raise ValueError("phase must be 'A' or 'B'")
         if phase == "A":

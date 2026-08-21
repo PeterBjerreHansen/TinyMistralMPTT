@@ -356,11 +356,45 @@ def _validate_payload(
 def load_model_weights(path: str | Path, *, model: torch.nn.Module) -> dict[str, Any]:
     payload = torch.load(Path(path), map_location="cpu", weights_only=False)
     _require_payload(payload)
-    model.load_state_dict(payload["model"], strict=True)
+    checkpoint_state = payload["model"]
+    expected_keys = set(model.state_dict())
+    checkpoint_keys = set(checkpoint_state)
+    missing = expected_keys - checkpoint_keys
+    unexpected = checkpoint_keys - expected_keys
+
+    allowed_missing: set[str] = set()
+    prefixes = tuple(
+        getattr(model, "initialization_only_state_prefixes", lambda: ())()
+    )
+    for prefix in prefixes:
+        expected_for_head = {key for key in expected_keys if key.startswith(prefix)}
+        present_for_head = {key for key in checkpoint_keys if key.startswith(prefix)}
+        if present_for_head and present_for_head != expected_for_head:
+            absent = sorted(expected_for_head - present_for_head)
+            extra = sorted(present_for_head - expected_for_head)
+            raise RuntimeError(
+                f"init_from checkpoint contains a partial {prefix!r} module; "
+                f"missing={absent}, unexpected={extra}"
+            )
+        if not present_for_head:
+            allowed_missing.update(expected_for_head)
+
+    disallowed_missing = sorted(missing - allowed_missing)
+    if disallowed_missing or unexpected:
+        raise RuntimeError(
+            "init_from model state is incompatible; "
+            f"missing={disallowed_missing}, unexpected={sorted(unexpected)}"
+        )
+    result = model.load_state_dict(checkpoint_state, strict=False)
+    if set(result.missing_keys) != allowed_missing or result.unexpected_keys:
+        raise RuntimeError(
+            "init_from compatibility check disagreed with PyTorch state loading"
+        )
     return {
         "source_path": str(path),
         "source_train_state": payload["train_state"],
         "source_experiment_config": payload["experiment_config"],
+        "freshly_initialized_model_keys": sorted(allowed_missing),
     }
 
 

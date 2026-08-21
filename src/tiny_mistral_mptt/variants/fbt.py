@@ -46,6 +46,7 @@ class FBTVariant(MultiPassVariant):
             nn.init.normal_(self.feedback_gate.weight, mean=0.0, std=std)
 
     def added_parameters(self) -> Iterable[nn.Parameter]:
+        yield from super().added_parameters()
         yield from self.feedback_value.parameters()
         yield from self.feedback_gate.parameters()
         yield from self.feedback_input_norm.parameters()

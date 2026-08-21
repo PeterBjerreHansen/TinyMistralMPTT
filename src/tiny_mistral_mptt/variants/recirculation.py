@@ -84,6 +84,7 @@ class RecirculationVariant(MultiPassVariant):
 
     variant_name = "recirculation"
     supports_cached_feedback = True
+    supports_recurrent_nmp = True
 
     def __init__(
         self,
@@ -118,6 +119,7 @@ class RecirculationVariant(MultiPassVariant):
             )
 
     def added_parameters(self) -> Iterable[nn.Parameter]:
+        yield from super().added_parameters()
         if self.adaptive_controller is not None:
             yield from self.adaptive_controller.parameters()
 

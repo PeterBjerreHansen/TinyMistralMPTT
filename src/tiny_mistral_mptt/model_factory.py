@@ -39,6 +39,9 @@ def build_variant(
     recirculation_destination_layer: int | None = None,
     recirculation_alpha: float = 0.1,
     recirculation_mode: str = "fixed",
+    recurrent_nmp_weight: float = 0.0,
+    tape_nmp_weight: float = 0.0,
+    nmp_projection_factor: float = 1.3,
 ) -> ExperimentalVariant:
     if name == "vanilla":
         variant: ExperimentalVariant = VanillaVariant(backbone)
@@ -121,6 +124,18 @@ def build_variant(
     else:
         raise ValueError(f"unknown variant {name!r}")
 
+    if recurrent_nmp_weight or tape_nmp_weight:
+        from .variants import MultiPassVariant
+
+        if not isinstance(variant, MultiPassVariant):
+            raise ValueError(f"{name} does not support NMP")
+        variant.configure_nmp(
+            recurrent_weight=recurrent_nmp_weight,
+            tape_weight=tape_nmp_weight,
+            projection_factor=nmp_projection_factor,
+            initialization_seed=architecture_seed,
+        )
+
     reference_parameter = next(backbone.parameters())
     variant.to(device=reference_parameter.device, dtype=reference_parameter.dtype)
     return variant
@@ -146,6 +161,9 @@ def load_variant(
     recirculation_destination_layer: int | None = None,
     recirculation_alpha: float = 0.1,
     recirculation_mode: str = "fixed",
+    recurrent_nmp_weight: float = 0.0,
+    tape_nmp_weight: float = 0.0,
+    nmp_projection_factor: float = 1.3,
 ) -> ExperimentalVariant:
     backbone = load_model(
         model_dir,
@@ -169,6 +187,9 @@ def load_variant(
         recirculation_destination_layer=recirculation_destination_layer,
         recirculation_alpha=recirculation_alpha,
         recirculation_mode=recirculation_mode,
+        recurrent_nmp_weight=recurrent_nmp_weight,
+        tape_nmp_weight=tape_nmp_weight,
+        nmp_projection_factor=nmp_projection_factor,
     )
 
 
@@ -197,4 +218,7 @@ def load_variant_from_config(
         recirculation_destination_layer=cfg.recirculation_destination_layer,
         recirculation_alpha=cfg.recirculation_alpha,
         recirculation_mode=cfg.recirculation_mode,
+        recurrent_nmp_weight=cfg.recurrent_nmp_weight,
+        tape_nmp_weight=cfg.tape_nmp_weight,
+        nmp_projection_factor=cfg.nmp_projection_factor,
     )

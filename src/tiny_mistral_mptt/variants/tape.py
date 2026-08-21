@@ -380,6 +380,7 @@ class TapeVariant(MultiPassVariant):
 
     variant_name = "tape"
     supports_cached_feedback = True
+    supports_tape_nmp = True
 
     def __init__(
         self,
@@ -464,6 +465,7 @@ class TapeVariant(MultiPassVariant):
         return self.uses_memory_tokens
 
     def added_parameters(self) -> Iterable[nn.Parameter]:
+        yield from super().added_parameters()
         yield from self.writer.parameters()
         if self.memory_token_embedding is not None:
             yield self.memory_token_embedding
@@ -581,6 +583,15 @@ class TapeVariant(MultiPassVariant):
         ordinary = ~self.memory_token_mask(input_ids)
         positions = ordinary.long().cumsum(dim=1) - 1
         return positions.clamp_min(0)
+
+    def nmp_written_states(self, final_tape_source: torch.Tensor) -> torch.Tensor:
+        return self.writer(final_tape_source)
+
+    def nmp_write_mask(self, input_ids: torch.Tensor) -> torch.Tensor:
+        return self.write_mask(input_ids)
+
+    def nmp_sequence_positions(self, input_ids: torch.Tensor) -> torch.Tensor:
+        return self.sequence_positions(input_ids)
 
     def next_sequence_positions(self, input_ids: torch.Tensor) -> torch.Tensor:
         self._validate_input_ids(input_ids)

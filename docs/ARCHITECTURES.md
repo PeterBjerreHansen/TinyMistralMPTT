@@ -5,6 +5,9 @@ and checkpoint ancestry belong under `benchmarks/`. This file defines only the
 reusable architecture surface. The full tape/control-token contract is in
 `TAPE_MEMORY.md`.
 
+The optional training-only latent objective is specified in
+`NEXT_MEMORY_PREDICTION.md`.
+
 ## Vanilla
 
 One ordinary TinyMistral causal pass with no architecture-added parameters.

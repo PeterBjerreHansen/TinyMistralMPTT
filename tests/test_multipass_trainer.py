@@ -10,6 +10,7 @@ from tiny_mistral_mptt.data.manifest import file_sha256
 from tiny_mistral_mptt.data.packed_dataset import PackedTokenDataset
 from tiny_mistral_mptt.data.prepare import PreparationRequest, materialize_from_document_iterators
 from tiny_mistral_mptt.data.recipes import DOLMINO_50B_SOURCES
+from tiny_mistral_mptt.model_factory import build_variant
 from tiny_mistral_mptt.training.trainer import Trainer
 from tiny_mistral_mptt.training.checkpoint import candidate_checkpoint_paths
 from tiny_mistral_mptt.variants.fbt import FBTVariant
@@ -47,6 +48,83 @@ def make_fbt(seed=123):
         MistralForCausalLM(micro_config(), attention_backend="reference"),
         initialization_seed=seed,
     )
+
+
+def make_memory_add(*, seed: int, nmp_weight: float = 0.0):
+    torch.manual_seed(seed)
+    return build_variant(
+        "memory_add",
+        MistralForCausalLM(micro_config(), attention_backend="reference"),
+        architecture_seed=seed + 100,
+        recurrent_nmp_weight=nmp_weight,
+    )
+
+
+def test_nmp_continuation_initializes_head_and_applies_token_ramp(tmp_path):
+    data_dir = tmp_path / "data-nmp"
+    make_artifact(data_dir)
+    train = PackedTokenDataset(data_dir, "train")
+    val = PackedTokenDataset(data_dir, "validation")
+    ntp_config = ExperimentConfig(
+        variant="memory_add",
+        phase="B",
+        model_dir="unused",
+        data_dir=str(data_dir),
+        output_dir=str(tmp_path / "ntp"),
+        device="cpu",
+        attention_backend="reference",
+        max_unique_tokens=8,
+        pass_schedule=[{"probabilities": {2: 1.0}}],
+        pass_loss_weights=[0.1, 0.9],
+        eval_every_tokens=0,
+        eval_batches=0,
+        checkpoint_every_tokens=0,
+    )
+    Trainer(
+        model=make_memory_add(seed=31),
+        config=ntp_config,
+        train_data=train,
+        validation_data=val,
+        device=torch.device("cpu"),
+    ).train()
+    ntp_checkpoint = candidate_checkpoint_paths(tmp_path / "ntp")[0]
+
+    nmp_config = ExperimentConfig(
+        variant="memory_add",
+        phase="B",
+        model_dir="unused",
+        data_dir=str(data_dir),
+        output_dir=str(tmp_path / "nmp"),
+        device="cpu",
+        attention_backend="reference",
+        max_unique_tokens=16,
+        pass_schedule=[{"probabilities": {2: 1.0}}],
+        pass_loss_weights=[0.1, 0.9],
+        init_from=str(ntp_checkpoint),
+        recurrent_nmp_weight=0.1,
+        nmp_warmup_tokens=16,
+        eval_every_tokens=0,
+        eval_batches=0,
+        checkpoint_every_tokens=0,
+    )
+    nmp_config.validate()
+    model = make_memory_add(seed=99, nmp_weight=0.1)
+    Trainer(
+        model=model,
+        config=nmp_config,
+        train_data=train,
+        validation_data=val,
+        device=torch.device("cpu"),
+    ).train()
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "nmp" / "metrics.jsonl").read_text().splitlines()
+        if json.loads(line).get("event") == "train"
+    ]
+    assert [record["nmp_weight_scale"] for record in records] == [0.0, 0.5]
+    assert all("recurrent_nmp_loss" in record for record in records)
+    assert model.recurrent_nmp_predictor is not None
+    assert torch.count_nonzero(model.recurrent_nmp_predictor.output.weight) > 0
 
 
 def test_phase_a_fixed_two_pass_training_counts_compute_and_freezes_backbone(tmp_path):

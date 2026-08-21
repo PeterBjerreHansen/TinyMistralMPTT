@@ -61,6 +61,12 @@ vocabulary size `V`; it is not added to the LM output head. For physical input
 `h_MEM` writes one tape record. See `docs/TAPE_MEMORY.md` for the exact attention,
 loss, cached-inference, and hybrid contracts.
 
+Memory models can optionally continue NTP training with a causal next-memory
+prediction head. The head sees only `h_t`, targets detached final-pass future
+memory features, and is absent from inference. See
+`docs/NEXT_MEMORY_PREDICTION.md` for alignment, gradient, checkpoint, and
+leakage contracts.
+
 ## Training and cloud execution
 
 The trainer supports exact resume on interruptible/spot instances: durable

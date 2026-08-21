@@ -602,6 +602,9 @@ class Trainer:
                         phase=cfg.phase,
                         passes=passes,
                         loss_weights=cfg.loss_weights_for_passes(passes),
+                        nmp_weight_scale=cfg.nmp_weight_scale_at(
+                            self.state.unique_tokens_seen
+                        ),
                     )
                 if not bool(torch.isfinite(output.loss).item()):
                     raise RuntimeError("non-finite training loss")

@@ -211,6 +211,13 @@ class ExperimentConfig:
     recirculation_alpha: float = 0.1
     recirculation_mode: str = "fixed"
 
+    # Training-only next-memory prediction (NMP). Disabled objectives do not
+    # instantiate heads and therefore preserve historical model state exactly.
+    recurrent_nmp_weight: float = 0.0
+    tape_nmp_weight: float = 0.0
+    nmp_projection_factor: float = 1.3
+    nmp_warmup_tokens: int = 0
+
     # ``resume_from`` restores the exact run. ``init_from`` loads model weights
     # only and begins a fresh trajectory/optimizer/data schedule.
     resume_from: str | None = None
@@ -252,6 +259,13 @@ class ExperimentConfig:
                     f"no pass-loss weights configured for sampled K={passes}"
                 ) from exc
         return self.pass_loss_weights
+
+    def nmp_weight_scale_at(self, unique_tokens_seen: int) -> float:
+        if unique_tokens_seen < 0:
+            raise ValueError("unique_tokens_seen must be non-negative")
+        if self.nmp_warmup_tokens == 0:
+            return 1.0
+        return min(float(unique_tokens_seen) / float(self.nmp_warmup_tokens), 1.0)
 
     def validate(self) -> None:
         if self.variant not in SUPPORTED_VARIANTS:
@@ -304,6 +318,44 @@ class ExperimentConfig:
                 raise ValueError("snapshot_at_tokens values must lie in (0, max_unique_tokens]")
         if self.memory_window <= 0:
             raise ValueError("memory_window must be positive")
+
+        for name, value in (
+            ("recurrent_nmp_weight", self.recurrent_nmp_weight),
+            ("tape_nmp_weight", self.tape_nmp_weight),
+        ):
+            if not math.isfinite(float(value)) or float(value) < 0:
+                raise ValueError(f"{name} must be finite and non-negative")
+        if (
+            not math.isfinite(float(self.nmp_projection_factor))
+            or self.nmp_projection_factor <= 0
+        ):
+            raise ValueError("nmp_projection_factor must be finite and positive")
+        if (
+            self.nmp_warmup_tokens < 0
+            or self.nmp_warmup_tokens > self.max_unique_tokens
+        ):
+            raise ValueError("nmp_warmup_tokens must lie in [0, max_unique_tokens]")
+        nmp_enabled = self.recurrent_nmp_weight > 0 or self.tape_nmp_weight > 0
+        if not nmp_enabled and self.nmp_warmup_tokens != 0:
+            raise ValueError("nmp_warmup_tokens requires an enabled NMP objective")
+        if nmp_enabled and not (self.init_from or self.resume_from):
+            raise ValueError(
+                "NMP continuation must use init_from or resume_from from an "
+                "NTP-trained run"
+            )
+        if nmp_enabled and self.nmp_warmup_tokens == 0:
+            raise ValueError("enabled NMP objectives require a positive nmp_warmup_tokens ramp")
+        recurrent_nmp_variants = {
+            "memory_add",
+            "recirculation",
+            "tape_add_hybrid",
+            "tape_recirculation_hybrid",
+        }
+        tape_nmp_variants = {"tape", "tape_add_hybrid", "tape_recirculation_hybrid"}
+        if self.recurrent_nmp_weight > 0 and self.variant not in recurrent_nmp_variants:
+            raise ValueError(f"variant={self.variant} does not support recurrent NMP")
+        if self.tape_nmp_weight > 0 and self.variant not in tape_nmp_variants:
+            raise ValueError(f"variant={self.variant} does not support tape NMP")
 
         recirculation_variants = {"recirculation", "tape_recirculation_hybrid"}
         if self.variant in recirculation_variants:
