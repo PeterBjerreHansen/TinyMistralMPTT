@@ -12,8 +12,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Materialize a deterministic local Dolmino token artifact.")
     parser.add_argument(
         "--config",
-        default="data/dolmino/local_2048/config.yaml",
-        help="data recipe beside the artifact; defaults to the active local 2048-token recipe",
+        default="data/dolmino/wiring_2048/config.yaml",
+        help="data recipe beside the artifact; defaults to the 5M wiring recipe",
     )
     args = parser.parse_args()
     cfg = load_data_config(args.config)
@@ -23,6 +23,7 @@ def main() -> None:
         sequence_length=cfg.sequence_length,
         train_tokens=cfg.train_tokens,
         validation_tokens=cfg.validation_tokens,
+        train_skip_tokens=cfg.train_skip_tokens,
         seed=cfg.seed,
         dataset_repo=cfg.dataset_repo,
         revision=cfg.revision,

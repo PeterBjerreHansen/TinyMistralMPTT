@@ -17,7 +17,7 @@ def _write_config(
         "variant: memory_add",
         "phase: B",
         "model_dir: checkpoints/TinyMistral-248M-v3",
-        "data_dir: data/dolmino/local_2048",
+        "data_dir: data/dolmino/wiring_2048",
         f"output_dir: {output_dir}",
         "device: cpu",
         "dtype: float32",

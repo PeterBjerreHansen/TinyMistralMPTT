@@ -29,5 +29,5 @@ accumulation to reach an arbitrary larger batch.
 
 Core Phase-A initialization should be rerun on the same pinned data artifact as
 core Phase B (`data/dolmino/gpu_2048` for the current plan), not inherited from
-the `local_2048` development wiring checkpoints. This avoids cross-artifact
+the `wiring_2048` development wiring checkpoints. This avoids cross-artifact
 validation ambiguity while keeping the historical development lineage intact.

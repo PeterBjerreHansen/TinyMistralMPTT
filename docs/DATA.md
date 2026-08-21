@@ -8,7 +8,8 @@ order.
 Checked-in preparation recipes live beside their local generated artifacts:
 
 ```text
-data/dolmino/local_2048/config.yaml
+data/dolmino/wiring_2048/config.yaml
+data/dolmino/pilot_2048/config.yaml
 data/dolmino/gpu_2048/config.yaml
 ```
 
@@ -20,6 +21,10 @@ For each source, validation documents are consumed first from a deterministic
 shuffled streaming iterator; the final partially used validation document is
 discarded. Training then continues from the next document. Thus train and
 validation are source-document-disjoint **within one materialized artifact**.
+An optional `train_skip_tokens` consumes and discards complete source-balanced
+blocks after validation and before the stored training split. This makes
+purpose-specific artifacts non-overlapping while keeping their shared
+validation bytes identical.
 
 Documents are tokenized with the pinned TinyMistral tokenizer, with BOS used as
 an explicit document separator. Packed blocks are fixed-length and unpadded.
@@ -37,7 +42,8 @@ artifact/
 
 The binary token IDs are ordinary vocabulary IDs only. The manifest records the
 vocabulary size, source allocation, tokenizer hash, requested/resolved dataset
-revision, recipe, shuffle settings, seed, and file hashes.
+revision, recipe, shuffle settings, seed, training-stream offset, and file
+hashes.
 
 ## Memory-token data view
 
@@ -56,7 +62,7 @@ No trailing MEM is inserted after the final linguistic token because there is no
 following linguistic token inside that block. Ordinary token order and source ID
 are unchanged.
 
-This means the standard `gpu_2048` / `local_2048` backing block remains 2048
+This means every standard backing block remains 2048
 **linguistic** tokens. At C=8 the tape model processes 2303 physical positions.
 That extra compute is intentional and separately accounted; it avoids silently
 reducing the text/data dose for MEM experiments.
@@ -66,8 +72,11 @@ training preflight checks this.
 
 ## Core-run split ownership
 
-The document-disjoint guarantee belongs to one materialized artifact. A locked
-core Phase-A initialization and Phase-B run should therefore use the same pinned
-core artifact as the reported validation set. Development wiring may use
-`local_2048`, but its checkpoint should not become the parent of a locked core
-run solely because it is convenient.
+The document-disjoint guarantee belongs to one materialized artifact.
+Development wiring uses `wiring_2048` exactly once per arm. Development pilots
+use `pilot_2048` exactly once when continued to their full 10M endpoint. Both
+share the same held-out validation split; the pilot recipe skips the complete
+5M wiring slice before storing its following 10M training slice. The larger
+`gpu_2048` artifact is reserved for serious runs and may be reshuffled and
+repeated when a declared training budget exceeds 100M tokens. In all three
+artifacts, evaluation remains source-document-disjoint from training.

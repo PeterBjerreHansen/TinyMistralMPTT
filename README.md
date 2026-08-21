@@ -107,11 +107,13 @@ environment that already provides the locked dependencies with:
 PYTHONPATH=src pytest -q
 ```
 
-Prepare/verify the local data artifact with:
+Prepare and verify the wiring and pilot artifacts with:
 
 ```bash
 uv run python scripts/prepare_data.py
-uv run python scripts/verify_data.py data/dolmino/local_2048
+uv run python scripts/verify_data.py data/dolmino/wiring_2048
+uv run python scripts/prepare_data.py --config data/dolmino/pilot_2048/config.yaml
+uv run python scripts/verify_data.py data/dolmino/pilot_2048
 ```
 
 Before paid CUDA training, qualify batching using `benchmarks/efficiency/`, then

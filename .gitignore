@@ -18,9 +18,12 @@ data/*
 !data/README.md
 !data/dolmino/
 data/dolmino/*
-!data/dolmino/local_2048/
-data/dolmino/local_2048/*
-!data/dolmino/local_2048/config.yaml
+!data/dolmino/wiring_2048/
+data/dolmino/wiring_2048/*
+!data/dolmino/wiring_2048/config.yaml
+!data/dolmino/pilot_2048/
+data/dolmino/pilot_2048/*
+!data/dolmino/pilot_2048/config.yaml
 !data/dolmino/gpu_2048/
 data/dolmino/gpu_2048/*
 !data/dolmino/gpu_2048/config.yaml

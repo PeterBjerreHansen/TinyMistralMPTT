@@ -58,9 +58,10 @@ training trajectory from an uncommitted source snapshot.
 
 Directory: `stage_1_wiring/`.
 
-Train only architecture-added parameters on MPS. The canonical budgets are 1M
-tokens for MemoryAdd, 2M for adaptive Recirculation, and 5M for each Tape policy
-and Hybrid. Use the final checkpoint rather than selecting the best
+Train only architecture-added parameters on MPS. Every arm consumes all
+5,242,880 training tokens in `data/dolmino/wiring_2048` exactly once. The
+default Phase-A added-parameter learning rate is `1e-4`, including adaptive
+Recirculation. Use the final checkpoint rather than selecting the best
 intermediate validation score. The downstream stages use `init_from`, not
 `resume_from`, so they start new optimizer, sampler, RNG, and pass-scheduler
 trajectories.
@@ -92,10 +93,14 @@ regression, K=3 collapse, or recurrent continuation failure.
 
 Directory: `stage_3_cloud_pilot/`.
 
-The configs have 10M-token endpoints, but the first invocation stops at 5M via
+The configs use the document-disjoint `data/dolmino/pilot_2048` artifact and
+have 10M-token endpoints, but the first invocation stops at 5M via
 `--until-unique-tokens 5242880`. This makes the pilot checkpoint the first
 confirmation seed if the arm is promoted; it can resume to the declared 10M
-endpoint without changing its trajectory.
+endpoint without changing its trajectory. At 10M, every arm has consumed the
+10,485,760-token training split exactly once. The pilot recipe skips the full
+5M wiring slice, so pilot training is disjoint from both wiring training and
+the shared held-out validation split.
 
 Before paid execution, run CUDA qualification and change hardware batch fields
 only if the same change is applied to all directly compared arms. Record

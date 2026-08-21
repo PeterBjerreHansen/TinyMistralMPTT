@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 from tiny_mistral_mptt.data.manifest import DataManifest
 from tiny_mistral_mptt.data.packed_dataset import PackedTokenDataset
@@ -17,7 +18,7 @@ def fake_tokenize(text: str) -> list[int]:
     return [3 + (ord(char) % 60) for char in text]
 
 
-def materialize(root: Path):
+def materialize(root: Path, *, train_skip_tokens: int = 0):
     request = PreparationRequest(
         output_dir=root,
         sequence_length=16,
@@ -31,6 +32,7 @@ def materialize(root: Path):
         tokenizer_sha256="abc123",
         vocab_size=97,
         bos_token_id=1,
+        train_skip_tokens=train_skip_tokens,
     )
     return materialize_from_document_iterators(
         request,
@@ -63,6 +65,15 @@ def test_packed_dataset_reads_fixed_unpadded_blocks(tmp_path):
     assert not train.block(0).equal(val.block(0))
 
 
+def test_training_skip_preserves_validation_and_advances_training_stream(tmp_path):
+    base = materialize(tmp_path / "base")
+    skipped = materialize(tmp_path / "skipped", train_skip_tokens=16 * 60)
+
+    assert skipped.train_skip_tokens == 16 * 60
+    assert skipped.validation.data_sha256 == base.validation.data_sha256
+    assert skipped.train.data_sha256 != base.train.data_sha256
+
+
 def test_verify_artifact_detects_mutation(tmp_path):
     from tiny_mistral_mptt.data.manifest import verify_artifact
     import pytest
@@ -75,4 +86,19 @@ def test_verify_artifact_detects_mutation(tmp_path):
     payload[0] ^= 1
     path.write_bytes(payload)
     with pytest.raises(ValueError, match="checksum"):
+        verify_artifact(root)
+
+
+def test_verify_artifact_rejects_invalid_training_offset(tmp_path):
+    from tiny_mistral_mptt.data.manifest import verify_artifact
+    import pytest
+
+    root = tmp_path / "artifact-offset"
+    materialize(root)
+    manifest_path = root / "manifest.json"
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    raw["train_skip_tokens"] = 1
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="training-stream offset"):
         verify_artifact(root)

@@ -161,7 +161,7 @@ def validate_lr_schedule(raw: dict[str, Any] | None) -> None:
 class ExperimentConfig:
     variant: str = "vanilla"
     model_dir: str = "checkpoints/TinyMistral-248M-v3"
-    data_dir: str = "data/dolmino/local_2048"
+    data_dir: str = "data/dolmino/wiring_2048"
     output_dir: str = "benchmarks/controls/smoke/results/generated/vanilla"
     device: str = "auto"
     dtype: str = "float32"

@@ -11,6 +11,11 @@ uv run python scripts/run_study.py \
 The configs declare 10M endpoints. Promoted seed-1337 arms resume to 10M by
 rerunning selected arms without `--until-unique-tokens`.
 
+Prepare and verify `data/dolmino/pilot_2048` on the execution host first. Its
+10,485,760 training tokens are consumed exactly once at the full endpoint, and
+its 256-block validation split is document-disjoint from training. The recipe
+also skips the full 5M wiring slice before collecting pilot training data.
+
 The pilot benchmarks dense, periodic-C32, and write-only explicit-`<MEM>`-C32
 Tape as separate arms. FBT is not part of this experimental pipeline.
 

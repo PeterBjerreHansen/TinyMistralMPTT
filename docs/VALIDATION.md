@@ -76,7 +76,8 @@ For TapeAddHybrid in memory-token mode:
 
 The spot-safe trainer is tested for:
 
-- at least two durable checkpoint generations;
+- two durable checkpoint generations by default, with explicit one-generation
+  retention supported for local runs;
 - a new generation being verified before `latest.json` advances;
 - corrupt-newest fallback to the previous generation;
 - incomplete `.tmp` files being ignored;
@@ -84,6 +85,12 @@ The spot-safe trainer is tested for:
 - source-code/environment identity checks on resume;
 - interruption/resume of memory-token Tape and TapeAddHybrid producing the same
   final model/optimizer/sampler/counters as uninterrupted training.
+
+Data preparation is tested for deterministic source allocation, checksum
+verification, and recorded source-balanced training offsets. The active wiring
+and pilot recipes must share validation settings, the pilot offset must equal
+the complete wiring training slice, and each stage budget must equal its stored
+training-token count.
 
 ## Study and hardware gates
 
