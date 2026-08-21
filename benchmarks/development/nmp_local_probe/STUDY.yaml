@@ -1,5 +1,5 @@
 name: nmp_local_probe
-status: active
+status: complete
 question: Do causal recurrent, tape, and dual NMP objectives behave stably and improve short local continuations over matched NTP-only controls?
 arms:
   - {id: memory_add_ntp, config: memory_add_ntp.yaml}
