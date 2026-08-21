@@ -10,3 +10,13 @@ training configs and data artifacts.
 
 Evaluation output should be written beside the benchmark/checkpoint being
 studied when it is worth retaining; otherwise use a temporary path.
+
+For multipass checkpoints, `scripts/evaluate_lm_harness.py` uses recurrent
+inference by default with a two-pass prompt prefill. The prompt is refined K
+times, then the continuation is scored or generated one token at a time from a
+single collapsed recurrent cache. Use `--prefill-passes K` to change K, or
+`--inference-mode forward` to measure the ordinary public one-pass path.
+
+The current harness path covers ordinary-token variants. Explicit memory-token
+Tape evaluation still requires a physical `<MEM>` insertion schedule; the
+ordinary text-task adapter does not silently insert control positions.

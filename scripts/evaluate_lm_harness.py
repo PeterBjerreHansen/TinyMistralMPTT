@@ -26,6 +26,18 @@ def main() -> None:
     parser.add_argument("--checkpoint", default=None)
     parser.add_argument("--limit", type=float, default=None)
     parser.add_argument("--output", default=None)
+    parser.add_argument(
+        "--inference-mode",
+        choices=("recurrent", "forward"),
+        default="recurrent",
+        help="multipass evaluation mode; recurrent performs one K-pass prefill",
+    )
+    parser.add_argument(
+        "--prefill-passes",
+        type=int,
+        default=2,
+        help="prompt refinement passes before collapsed recurrent evaluation",
+    )
     args = parser.parse_args()
     try:
         import lm_eval
@@ -44,6 +56,8 @@ def main() -> None:
         model,
         tokenizer_path=Path(cfg.model_dir) / "tokenizer.json",
         device=device,
+        inference_mode=args.inference_mode,
+        prefill_passes=args.prefill_passes,
     )
     suite = yaml.safe_load(Path(args.suite).read_text(encoding="utf-8"))
     collected = {}
@@ -58,7 +72,12 @@ def main() -> None:
         )
         collected[name] = result["results"][name]
         print(name, json.dumps(collected[name], sort_keys=True, default=str))
-    output = {"suite": str(args.suite), "results": collected}
+    output = {
+        "suite": str(args.suite),
+        "inference_mode": args.inference_mode,
+        "prefill_passes": args.prefill_passes,
+        "results": collected,
+    }
     text = json.dumps(output, indent=2, sort_keys=True, default=str) + "\n"
     if args.output:
         path = Path(args.output)

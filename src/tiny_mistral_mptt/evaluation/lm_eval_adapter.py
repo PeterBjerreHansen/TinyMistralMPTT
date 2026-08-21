@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Literal
 
 import torch
 import torch.nn.functional as F
+
+from ..inference import prefill_recurrent, recurrent_decode_step
+from ..variants.multipass import MultiPassVariant
 
 
 try:  # Optional dependency: imported only for the external benchmark battery.
@@ -61,6 +64,138 @@ def score_token_continuation(
     return total, greedy
 
 
+def _truncate_token_pair(
+    *,
+    max_length: int,
+    context_enc: list[int],
+    continuation_enc: list[int],
+) -> tuple[list[int], list[int]]:
+    """Return a cached prompt and the continuation targets to score.
+
+    The non-cached harness path scores ``combined[:-1]`` against
+    ``combined[1:]``.  Recurrent inference needs the same causal boundary, but
+    can only prefill a non-empty prompt and then consume targets one at a time.
+    ``prompt`` therefore ends immediately before the first scored target.
+    """
+    if max_length < 1:
+        raise ValueError("max_length must be positive")
+    if not context_enc:
+        raise ValueError("context_enc must contain at least one prefix/context token")
+    if not continuation_enc:
+        return list(context_enc[-max_length:]), []
+
+    combined = list(context_enc) + list(continuation_enc)
+    if len(combined) > max_length + 1:
+        removed = len(combined) - (max_length + 1)
+        combined = combined[removed:]
+        remaining_context = max(len(context_enc) - removed, 0)
+    else:
+        remaining_context = len(context_enc)
+
+    input_tokens = combined[:-1]
+    target_tokens = combined[1:]
+    start = max(remaining_context - 1, 0)
+    if not target_tokens[start:]:
+        return input_tokens, []
+    prompt = combined[: start + 1]
+    if not prompt:
+        raise ValueError("recurrent scoring requires a non-empty prompt")
+    return prompt, target_tokens[start:]
+
+
+@torch.no_grad()
+def score_token_continuation_recurrent(
+    model: MultiPassVariant,
+    *,
+    device: str | torch.device,
+    max_length: int,
+    prefill_passes: int,
+    context_enc: list[int],
+    continuation_enc: list[int],
+) -> tuple[float, bool]:
+    """Score a continuation with recurrent cached inference.
+
+    The prompt is refined ``prefill_passes`` times.  Each continuation target
+    is scored from the current cached logits, then observed once through
+    ``recurrent_decode_step`` to advance the one-stream state.  The final
+    target is not decoded because no later prediction depends on it, which
+    keeps the observed sequence within the model position limit.
+    """
+    if prefill_passes < 1:
+        raise ValueError("prefill_passes must be positive")
+    prompt, targets = _truncate_token_pair(
+        max_length=max_length,
+        context_enc=context_enc,
+        continuation_enc=continuation_enc,
+    )
+    if not targets:
+        return 0.0, True
+
+    prompt_ids = torch.tensor([prompt], dtype=torch.long, device=device)
+    state = prefill_recurrent(model, prompt_ids, passes=prefill_passes)
+    total = 0.0
+    greedy = True
+    for index, target_id in enumerate(targets):
+        target = torch.tensor([[target_id]], dtype=torch.long, device=device)
+        logits = state.next_token_logits.float()
+        log_probs = F.log_softmax(logits, dim=-1)
+        total += float(log_probs[0, target_id].cpu())
+        greedy = greedy and bool(torch.argmax(logits, dim=-1).eq(target[:, 0]).item())
+
+        # The final target has already been scored and does not need to be
+        # consumed.  Avoiding that extra cache write preserves max_length + 1
+        # harness scoring semantics.
+        if index + 1 < len(targets):
+            state = recurrent_decode_step(model, state, target)
+    return total, greedy
+
+
+@torch.no_grad()
+def generate_recurrent(
+    model: MultiPassVariant,
+    input_ids: torch.Tensor,
+    max_new_tokens: int,
+    *,
+    prefill_passes: int,
+    temperature: float = 0.0,
+    top_k: int | None = None,
+    eos_token_id: int | None = None,
+) -> torch.Tensor:
+    """Generate with one recurrent cached stream after multipass prefill."""
+    if input_ids.ndim != 2 or input_ids.shape[1] == 0:
+        raise ValueError("input_ids must be non-empty [B,T]")
+    if input_ids.shape[0] != 1:
+        raise ValueError("recurrent generation currently supports batch size 1")
+    if max_new_tokens < 0:
+        raise ValueError("max_new_tokens must be non-negative")
+    if top_k is not None and top_k <= 0:
+        raise ValueError("top_k must be positive or None")
+    if max_new_tokens == 0:
+        return input_ids
+
+    state = prefill_recurrent(model, input_ids, passes=prefill_passes)
+    eos = model.config.eos_token_id if eos_token_id is None else eos_token_id
+    result = input_ids
+    for step in range(max_new_tokens):
+        logits = state.next_token_logits.float()
+        if temperature <= 0:
+            next_token = torch.argmax(logits, dim=-1, keepdim=True)
+        else:
+            scaled = logits / temperature
+            if top_k is not None:
+                k = min(top_k, scaled.shape[-1])
+                threshold = torch.topk(scaled, k, dim=-1).values[:, -1:]
+                scaled = scaled.masked_fill(scaled < threshold, float("-inf"))
+            next_token = torch.multinomial(F.softmax(scaled, dim=-1), 1)
+        result = torch.cat((result, next_token), dim=1)
+        if eos is not None and bool(torch.all(next_token.squeeze(-1) == eos).item()):
+            break
+        if step == max_new_tokens - 1:
+            break
+        state = recurrent_decode_step(model, state, next_token)
+    return result
+
+
 class _TokenizerFacade:
     def __init__(self, path: str | Path):
         try:
@@ -92,12 +227,20 @@ def _build_lm_eval_class():
             tokenizer_path: str | Path,
             device: str | torch.device,
             max_gen_toks: int = 128,
+            inference_mode: Literal["forward", "recurrent"] = "recurrent",
+            prefill_passes: int = 2,
         ):
             super().__init__()
+            if inference_mode not in {"forward", "recurrent"}:
+                raise ValueError("inference_mode must be 'forward' or 'recurrent'")
+            if prefill_passes < 1:
+                raise ValueError("prefill_passes must be positive")
             self.model = model
             self._device = torch.device(device)
             self._tokenizer_facade = _TokenizerFacade(tokenizer_path)
             self._max_gen_toks = int(max_gen_toks)
+            self._inference_mode = inference_mode
+            self._prefill_passes = int(prefill_passes)
             self.batch_size = 1
             self.model.eval()
 
@@ -121,6 +264,14 @@ def _build_lm_eval_class():
         def tokenizer_name(self) -> str:
             return "TinyMistral-248M-v3-tokenizer"
 
+        @property
+        def inference_mode(self) -> str:
+            return self._inference_mode
+
+        @property
+        def prefill_passes(self) -> int:
+            return self._prefill_passes
+
         def tok_encode(self, string: str, add_special_tokens: bool | None = None, **kwargs) -> list[int]:
             # TinyMistral's baseline experiments use raw tokenizer.json encoding;
             # BOS is inserted explicitly only when the harness needs an empty context.
@@ -133,13 +284,25 @@ def _build_lm_eval_class():
         def _loglikelihood_tokens(self, requests, disable_tqdm: bool = False, **kwargs):
             results: list[tuple[float, bool]] = []
             for cache_key, context_enc, continuation_enc in requests:
-                answer = score_token_continuation(
-                    self.model,
-                    device=self._device,
-                    max_length=self.max_length,
-                    context_enc=list(context_enc),
-                    continuation_enc=list(continuation_enc),
-                )
+                if self._inference_mode == "recurrent" and isinstance(
+                    self.model, MultiPassVariant
+                ):
+                    answer = score_token_continuation_recurrent(
+                        self.model,
+                        device=self._device,
+                        max_length=self.max_length,
+                        prefill_passes=self._prefill_passes,
+                        context_enc=list(context_enc),
+                        continuation_enc=list(continuation_enc),
+                    )
+                else:
+                    answer = score_token_continuation(
+                        self.model,
+                        device=self._device,
+                        max_length=self.max_length,
+                        context_enc=list(context_enc),
+                        continuation_enc=list(continuation_enc),
+                    )
                 results.append(answer)
                 if cache_key is not None:
                     self.cache_hook.add_partial("loglikelihood", cache_key, answer)
@@ -189,12 +352,24 @@ def _build_lm_eval_class():
                 max_prompt = max(1, self.max_length - max_new)
                 context_ids = context_ids[-max_prompt:]
                 prompt = torch.tensor([context_ids], dtype=torch.long, device=self._device)
-                generated = self.model.generate(
-                    prompt,
-                    max_new,
-                    temperature=temperature,
-                    top_k=None if top_k is None else int(top_k),
-                )
+                if self._inference_mode == "recurrent" and isinstance(
+                    self.model, MultiPassVariant
+                ):
+                    generated = generate_recurrent(
+                        self.model,
+                        prompt,
+                        max_new,
+                        prefill_passes=self._prefill_passes,
+                        temperature=temperature,
+                        top_k=None if top_k is None else int(top_k),
+                    )
+                else:
+                    generated = self.model.generate(
+                        prompt,
+                        max_new,
+                        temperature=temperature,
+                        top_k=None if top_k is None else int(top_k),
+                    )
                 suffix_ids = generated[0, prompt.shape[1] :].tolist()
                 text = self.tok_decode(suffix_ids)
                 cut = len(text)
@@ -213,7 +388,15 @@ def _build_lm_eval_class():
 TinyMistralHarnessLM = _build_lm_eval_class()
 
 
-def make_lm_eval_adapter(model, *, tokenizer_path: str | Path, device: str | torch.device, max_gen_toks: int = 128):
+def make_lm_eval_adapter(
+    model,
+    *,
+    tokenizer_path: str | Path,
+    device: str | torch.device,
+    max_gen_toks: int = 128,
+    inference_mode: Literal["forward", "recurrent"] = "recurrent",
+    prefill_passes: int = 2,
+):
     if TinyMistralHarnessLM is None:
         raise RuntimeError("lm-evaluation-harness is not installed; run: uv sync --extra eval")
     return TinyMistralHarnessLM(
@@ -221,4 +404,6 @@ def make_lm_eval_adapter(model, *, tokenizer_path: str | Path, device: str | tor
         tokenizer_path=tokenizer_path,
         device=device,
         max_gen_toks=max_gen_toks,
+        inference_mode=inference_mode,
+        prefill_passes=prefill_passes,
     )

@@ -31,4 +31,7 @@ data/dolmino/gpu_2048/*
 # Training outputs remain colocated with their study/control but are not source.
 benchmarks/**/results/generated/
 
+# Historical benchmark artifacts are local review material, not branch source.
+benchmarks/historical/
+
 .coverage

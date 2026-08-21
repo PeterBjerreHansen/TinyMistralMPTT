@@ -2,7 +2,15 @@ from types import SimpleNamespace
 
 import torch
 
+from conftest import micro_config
+from tiny_mistral.modeling import MistralForCausalLM
 from tiny_mistral_mptt.evaluation.lm_eval_adapter import score_token_continuation
+from tiny_mistral_mptt.evaluation.lm_eval_adapter import (
+    generate_recurrent,
+    score_token_continuation_recurrent,
+)
+from tiny_mistral_mptt.inference import prefill_recurrent, recurrent_decode_step
+from tiny_mistral_mptt.variants.memory_add import MemoryAddVariant
 
 
 class NextIdModel(torch.nn.Module):
@@ -51,3 +59,82 @@ def test_token_continuation_left_truncation_keeps_requested_targets():
     )
     assert greedy is True
     assert score > -1e-5
+
+
+def _make_memory_model():
+    torch.manual_seed(444)
+    backbone = MistralForCausalLM(
+        micro_config(sliding_window=4), attention_backend="reference"
+    )
+    model = MemoryAddVariant(backbone).eval()
+    with torch.no_grad():
+        model.memory_projection.weight.copy_(0.05 * torch.eye(model.config.hidden_size))
+    return model
+
+
+def test_recurrent_task_scoring_uses_one_collapsed_stream(monkeypatch):
+    model = _make_memory_model()
+
+    def forbidden_forward(*args, **kwargs):
+        raise AssertionError("recurrent task scoring must not call public forward")
+
+    monkeypatch.setattr(model, "forward", forbidden_forward)
+    score, greedy = score_token_continuation_recurrent(
+        model,
+        device="cpu",
+        max_length=16,
+        prefill_passes=2,
+        context_enc=[1, 7, 3, 14],
+        continuation_enc=[22, 9, 31],
+    )
+
+    state = prefill_recurrent(
+        model,
+        torch.tensor([[1, 7, 3, 14]], dtype=torch.long),
+        passes=2,
+    )
+    expected_score = 0.0
+    expected_greedy = True
+    targets = [22, 9, 31]
+    for index, token_id in enumerate(targets):
+        logits = state.next_token_logits.float()
+        expected_score += float(torch.log_softmax(logits, dim=-1)[0, token_id])
+        expected_greedy = expected_greedy and bool(
+            torch.argmax(logits, dim=-1).item() == token_id
+        )
+        if index + 1 < len(targets):
+            state = recurrent_decode_step(
+                model,
+                state,
+                torch.tensor([[token_id]], dtype=torch.long),
+            )
+
+    assert abs(score - expected_score) < 1e-6
+    assert greedy is expected_greedy
+
+
+def test_recurrent_task_generation_matches_incremental_greedy_decode(monkeypatch):
+    model = _make_memory_model()
+
+    def forbidden_forward(*args, **kwargs):
+        raise AssertionError("recurrent generation must not call public forward")
+
+    monkeypatch.setattr(model, "forward", forbidden_forward)
+    prompt = torch.tensor([[1, 7, 3, 14]], dtype=torch.long)
+    generated = generate_recurrent(
+        model,
+        prompt,
+        3,
+        prefill_passes=2,
+        temperature=0.0,
+    )
+
+    state = prefill_recurrent(model, prompt, passes=2)
+    expected = prompt.clone()
+    for step in range(3):
+        token = torch.argmax(state.next_token_logits, dim=-1, keepdim=True)
+        expected = torch.cat((expected, token), dim=1)
+        if step < 2:
+            state = recurrent_decode_step(model, state, token)
+
+    torch.testing.assert_close(generated, expected)
