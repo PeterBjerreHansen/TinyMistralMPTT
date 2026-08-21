@@ -7,6 +7,7 @@ from typing import Any
 
 import yaml
 
+from .nmp import NMP_TARGET_NORMALIZATIONS
 
 SUPPORTED_VARIANTS = {
     "vanilla",
@@ -215,6 +216,11 @@ class ExperimentConfig:
     # instantiate heads and therefore preserve historical model state exactly.
     recurrent_nmp_weight: float = 0.0
     tape_nmp_weight: float = 0.0
+    # Recirculation sources are high-amplitude residual-stream states, so the
+    # default target is parameter-free RMS-normalized. ``none`` remains useful
+    # as a raw-state ablation. Tape targets are always the post-writer memory
+    # representation and are intentionally not normalized here.
+    recurrent_nmp_target_normalization: str = "rms"
     nmp_projection_factor: float = 1.3
     nmp_warmup_tokens: int = 0
 
@@ -325,6 +331,11 @@ class ExperimentConfig:
         ):
             if not math.isfinite(float(value)) or float(value) < 0:
                 raise ValueError(f"{name} must be finite and non-negative")
+        if self.recurrent_nmp_target_normalization not in NMP_TARGET_NORMALIZATIONS:
+            raise ValueError(
+                "recurrent_nmp_target_normalization must be one of "
+                f"{sorted(NMP_TARGET_NORMALIZATIONS)}"
+            )
         if (
             not math.isfinite(float(self.nmp_projection_factor))
             or self.nmp_projection_factor <= 0

@@ -1,0 +1,523 @@
+#!/usr/bin/env python3
+"""Start a remote training run, watch it, transfer verified artifacts, and clean up.
+
+The controller is intentionally provider-light: Verda is used only for the
+optional VM cleanup action. Training state is observed through the durable
+segments.jsonl journal, not through an estimated wall-clock duration.
+"""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+import hashlib
+import json
+from pathlib import Path
+import posixpath
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+
+
+class ControllerError(RuntimeError):
+    """A recoverable controller failure that must not trigger cleanup."""
+
+
+@dataclass(frozen=True)
+class Status:
+    state: str
+    pid: int | None
+    unique_tokens: int | None
+    target_tokens: int | None
+    reason: str | None
+
+
+def _q(value: str | Path) -> str:
+    return shlex.quote(str(value))
+
+
+def _remote_path(root: str, value: str) -> str:
+    if value.startswith("/"):
+        return value
+    return posixpath.join(root.rstrip("/"), value)
+
+
+def _run(
+    command: list[str],
+    *,
+    capture: bool = False,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    print("$ " + shlex.join(command), flush=True)
+    result = subprocess.run(
+        command,
+        text=True,
+        capture_output=capture,
+        check=False,
+    )
+    if check and result.returncode != 0:
+        detail = result.stderr.strip() if capture else ""
+        raise ControllerError(
+            f"command failed with exit code {result.returncode}: "
+            f"{shlex.join(command)}{(': ' + detail) if detail else ''}"
+        )
+    return result
+
+
+def _ssh_base(args: argparse.Namespace) -> list[str]:
+    return [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        f"ConnectTimeout={args.ssh_timeout}",
+        "-i",
+        str(args.ssh_key),
+        f"{args.remote_user}@{args.host}",
+    ]
+
+
+def _ssh(
+    args: argparse.Namespace,
+    remote_command: str,
+    *,
+    capture: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    return _run([*_ssh_base(args), remote_command], capture=capture)
+
+
+def _status_code() -> str:
+    return r'''import json, pathlib, subprocess, sys
+out = pathlib.Path(sys.argv[1])
+pid = None
+pid_path = out / "train.pid"
+try:
+    pid = int(pid_path.read_text(encoding="utf-8").strip())
+except (FileNotFoundError, ValueError):
+    pass
+state_text = ""
+if pid is not None:
+    result = subprocess.run(
+        ["ps", "-o", "stat=", "-p", str(pid)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    state_text = result.stdout.strip()
+alive = bool(state_text) and not state_text.startswith("Z")
+last_end = None
+segments = out / "segments.jsonl"
+if segments.is_file():
+    for line in segments.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("event") == "segment_end":
+            last_end = record
+run_config = {}
+try:
+    run_config = json.loads((out / "run.json").read_text(encoding="utf-8")).get("config", {})
+except (FileNotFoundError, json.JSONDecodeError):
+    pass
+configured_target = run_config.get("max_unique_tokens")
+target_override = sys.argv[2]
+target = int(target_override) if target_override else configured_target
+tokens = None if last_end is None else last_end.get("end_unique_tokens")
+if alive:
+    state = "running"
+elif last_end is None:
+    state = "not_started"
+elif last_end.get("reason") == "completed" and (target is None or tokens >= target):
+    state = "completed"
+else:
+    state = "interrupted"
+print(json.dumps({
+    "state": state,
+    "pid": pid,
+    "unique_tokens": tokens,
+    "target_tokens": target,
+    "reason": None if last_end is None else last_end.get("reason"),
+}))'''
+
+
+def _config_output_code() -> str:
+    return r'''import pathlib, sys, yaml
+root = pathlib.Path(sys.argv[1]).resolve()
+config = pathlib.Path(sys.argv[2])
+expected = pathlib.Path(sys.argv[3]).resolve()
+raw = yaml.safe_load(config.read_text(encoding="utf-8")) or {}
+configured = pathlib.Path(str(raw["output_dir"]))
+if not configured.is_absolute():
+    configured = (root / configured).resolve()
+if configured != expected:
+    raise SystemExit(
+        f"config output_dir resolves to {configured}, but controller watches {expected}"
+    )'''
+
+
+def _read_status(args: argparse.Namespace, output: str) -> Status:
+    target_override = "" if args.until_unique_tokens is None else str(args.until_unique_tokens)
+    command = (
+        f"cd {_q(args.remote_root)} && python3 -c {_q(_status_code())} "
+        f"{_q(output)} {_q(target_override)}"
+    )
+    result = _ssh(args, command, capture=True)
+    try:
+        payload = json.loads(result.stdout.strip())
+    except json.JSONDecodeError as exc:
+        raise ControllerError(f"remote status was not valid JSON: {result.stdout!r}") from exc
+    return Status(
+        state=str(payload["state"]),
+        pid=None if payload.get("pid") is None else int(payload["pid"]),
+        unique_tokens=(
+            None if payload.get("unique_tokens") is None else int(payload["unique_tokens"])
+        ),
+        target_tokens=(
+            None if payload.get("target_tokens") is None else int(payload["target_tokens"])
+        ),
+        reason=payload.get("reason"),
+    )
+
+
+def _launch(args: argparse.Namespace, config: str, output: str) -> int:
+    until = ""
+    if args.until_unique_tokens is not None:
+        until = f" --until-unique-tokens {args.until_unique_tokens}"
+    command = (
+        f"set -eu; export PATH=/root/.local/bin:$PATH; cd {_q(args.remote_root)}; "
+        f"test -f {_q(config)}; "
+        f"python3 -c {_q(_config_output_code())} . {_q(config)} {_q(output)}; "
+        f"mkdir -p {_q(output)}; "
+        f"if test -f {_q(posixpath.join(output, 'train.pid'))}; then "
+        f"  old_pid=$(cat {_q(posixpath.join(output, 'train.pid'))} || true); "
+        f"  if test -n \"$old_pid\" && ps -p \"$old_pid\" -o stat= | grep -vq '^Z'; then "
+        f"    echo 'training process already active' >&2; exit 11; "
+        f"  fi; "
+        f"fi; "
+        f"nohup uv run python scripts/train.py --config {_q(config)} --resume-auto"
+        f"{until} > {_q(posixpath.join(output, 'train.log'))} 2>&1 < /dev/null & "
+        f"pid=$!; printf '%s\\n' \"$pid\" > {_q(posixpath.join(output, 'train.pid'))}; "
+        f"printf '%s\\n' \"$pid\""
+    )
+    result = _ssh(args, command, capture=True)
+    try:
+        return int(result.stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError) as exc:
+        raise ControllerError(f"remote launch did not return a PID: {result.stdout!r}") from exc
+
+
+def _wait_for_ssh(args: argparse.Namespace) -> None:
+    deadline = time.monotonic() + args.ssh_wait_timeout
+    while time.monotonic() < deadline:
+        result = _run([*_ssh_base(args), "true"], capture=True, check=False)
+        if result.returncode == 0:
+            return
+        time.sleep(min(args.poll_seconds, 10.0))
+    raise ControllerError(f"SSH did not become available within {args.ssh_wait_timeout:g}s")
+
+
+def _transfer(args: argparse.Namespace, remote_output: str) -> None:
+    args.local_output.mkdir(parents=True, exist_ok=True)
+    source = f"{args.remote_user}@{args.host}:{remote_output.rstrip('/')}/"
+    # rsync's -e value is the SSH executable plus options, not the destination.
+    ssh_for_rsync = shlex.join(_ssh_base(args)[:-1])
+    command = [
+        "rsync",
+        "-a",
+        "--partial",
+        "--stats",
+        "-e",
+        ssh_for_rsync,
+        "--exclude=.rsync-partial/**",
+    ]
+    if args.transfer == "metadata":
+        command.extend(
+            [
+                "--exclude=checkpoints/**",
+                "--exclude=snapshots/*.safetensors",
+                "--exclude=snapshots/*.safetensors.tmp",
+            ]
+        )
+    command.extend([source, f"{args.local_output}/"])
+    _run(command)
+
+
+def _included(relative: str, transfer: str) -> bool:
+    if relative == ".rsync-partial" or relative.startswith(".rsync-partial/"):
+        return False
+    if transfer == "metadata":
+        if relative == "checkpoints" or relative.startswith("checkpoints/"):
+            return False
+        if relative.startswith("snapshots/") and relative.endswith(".safetensors"):
+            return False
+        if relative.endswith(".safetensors.tmp"):
+            return False
+    return True
+
+
+def _local_manifest(root: Path, transfer: str) -> str:
+    rows: list[str] = []
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        relative = path.relative_to(root).as_posix()
+        if not _included(relative, transfer):
+            continue
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        rows.append(f"{digest.hexdigest()}  {relative}")
+    return "\n".join(rows)
+
+
+def _remote_manifest_code() -> str:
+    return r'''import hashlib, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+transfer = sys.argv[2]
+def included(relative):
+    if relative == ".rsync-partial" or relative.startswith(".rsync-partial/"):
+        return False
+    if transfer == "metadata":
+        if relative == "checkpoints" or relative.startswith("checkpoints/"):
+            return False
+        if relative.startswith("snapshots/") and relative.endswith(".safetensors"):
+            return False
+        if relative.endswith(".safetensors.tmp"):
+            return False
+    return True
+rows = []
+for path in sorted(p for p in root.rglob("*") if p.is_file()):
+    relative = path.relative_to(root).as_posix()
+    if not included(relative):
+        continue
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    rows.append(f"{digest.hexdigest()}  {relative}")
+print("\n".join(rows))'''
+
+
+def _verify_transfer(args: argparse.Namespace, remote_output: str) -> None:
+    local = _local_manifest(args.local_output, args.transfer)
+    command = (
+        f"cd {_q(args.remote_root)} && python3 -c {_q(_remote_manifest_code())} "
+        f"{_q(remote_output)} {_q(args.transfer)}"
+    )
+    remote = _ssh(args, command, capture=True).stdout.strip()
+    if local != remote:
+        raise ControllerError(
+            "transferred artifact checksum manifest does not match the VM; "
+            "cleanup was skipped"
+        )
+    print(f"PASS: SHA-256 manifest verified ({len(local.splitlines()) if local else 0} files)")
+
+
+def _cleanup(args: argparse.Namespace) -> None:
+    if args.cleanup == "none":
+        print("INFO: cleanup disabled")
+        return
+    if not args.vm_id:
+        raise ControllerError("--vm-id is required for VM cleanup")
+    if args.cleanup == "shutdown":
+        _run(
+            [
+                args.verda,
+                "--agent",
+                "vm",
+                "shutdown",
+                "--id",
+                args.vm_id,
+                "--wait",
+                "--yes",
+            ]
+        )
+    elif args.cleanup == "delete":
+        # Deliberately omit --with-volumes: the persistent OS volume survives.
+        _run(
+            [
+                args.verda,
+                "--agent",
+                "vm",
+                "delete",
+                "--id",
+                args.vm_id,
+                "--wait",
+                "--yes",
+            ]
+        )
+
+
+def _delete_remote_output(args: argparse.Namespace, remote_output: str) -> None:
+    code = r'''import pathlib, shutil, sys
+path = pathlib.Path(sys.argv[1])
+if not path.is_dir() or not (path / "run.json").is_file():
+    raise SystemExit(f"refusing to delete unexpected remote output: {path}")
+shutil.rmtree(path)'''
+    command = f"python3 -c {_q(code)} {_q(remote_output)}"
+    _ssh(args, command)
+    print(f"PASS: deleted verified remote output {remote_output}")
+
+
+def _notify(message: str, *, enabled: bool) -> None:
+    if not enabled or shutil.which("osascript") is None:
+        return
+    escaped = message.replace("\\", "\\\\").replace('"', '\\"')
+    subprocess.run(
+        [
+            "osascript",
+            "-e",
+            f'display notification "{escaped}" with title "TinyMistralMPTT"',
+        ],
+        check=False,
+    )
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Start, watch, transfer, and safely clean up a remote training run."
+    )
+    parser.add_argument("--host", required=True, help="remote VM hostname or IP")
+    parser.add_argument("--vm-id", help="Verda VM ID; required for --start-vm or cleanup")
+    parser.add_argument("--remote-user", default="root")
+    parser.add_argument("--ssh-key", type=Path, default=Path("~/.ssh/id_ed25519").expanduser())
+    parser.add_argument("--remote-root", default="/root/TinyMistralMPTT")
+    parser.add_argument("--config", required=True, help="config path relative to --remote-root")
+    parser.add_argument(
+        "--remote-output",
+        required=True,
+        help="output path relative to --remote-root; must match config output_dir",
+    )
+    parser.add_argument("--local-output", type=Path, required=True)
+    parser.add_argument("--until-unique-tokens", type=int, default=None)
+    parser.add_argument("--start-vm", action="store_true", help="start the VM before waiting for SSH")
+    parser.add_argument(
+        "--watch-existing",
+        action="store_true",
+        help="transfer an already-completed output instead of launching a second run",
+    )
+    parser.add_argument("--cleanup", choices=("none", "shutdown", "delete"), default="shutdown")
+    parser.add_argument(
+        "--delete-remote-output",
+        action="store_true",
+        help="delete the verified remote run directory before VM cleanup",
+    )
+    parser.add_argument(
+        "--transfer",
+        choices=("all", "metadata"),
+        default="all",
+        help="transfer all artifacts or omit large checkpoints/model snapshots",
+    )
+    parser.add_argument("--poll-seconds", type=float, default=60.0)
+    parser.add_argument("--ssh-timeout", type=int, default=15)
+    parser.add_argument("--ssh-wait-timeout", type=float, default=300.0)
+    parser.add_argument("--max-ssh-failures", type=int, default=5)
+    parser.add_argument("--verda", default="verda")
+    parser.add_argument("--no-notify", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    return parser
+
+
+def main() -> int:
+    args = _parser().parse_args()
+    args.ssh_key = args.ssh_key.expanduser()
+    args.local_output = args.local_output.expanduser().resolve()
+    if args.until_unique_tokens is not None and args.until_unique_tokens <= 0:
+        raise SystemExit("--until-unique-tokens must be positive")
+    if args.poll_seconds <= 0 or args.max_ssh_failures < 0:
+        raise SystemExit("poll and SSH failure settings must be non-negative, with poll > 0")
+    if (args.start_vm or args.cleanup != "none") and not args.vm_id:
+        raise SystemExit("--vm-id is required with --start-vm or cleanup")
+    if not args.dry_run and not args.ssh_key.is_file():
+        raise SystemExit(f"SSH key does not exist: {args.ssh_key}")
+
+    config = _remote_path(args.remote_root, args.config)
+    remote_output = _remote_path(args.remote_root, args.remote_output)
+    print(f"INFO: remote output {remote_output}")
+    print(f"INFO: local output  {args.local_output}")
+    print(f"INFO: transfer={args.transfer} cleanup={args.cleanup}")
+
+    if args.dry_run:
+        print("INFO: dry run; no VM, SSH, transfer, or cleanup action performed")
+        return 0
+
+    try:
+        if args.start_vm:
+            _run(
+                [
+                    args.verda,
+                    "--agent",
+                    "vm",
+                    "start",
+                    "--id",
+                    args.vm_id,
+                    "--wait",
+                ]
+            )
+        _wait_for_ssh(args)
+        prior = _read_status(args, remote_output)
+        if prior.state == "running":
+            raise ControllerError(
+                f"refusing to launch: remote output already has an active process (pid={prior.pid})"
+            )
+        if prior.state == "completed" and not args.watch_existing:
+            raise ControllerError("refusing to launch: remote output is already complete")
+        if prior.state == "completed":
+            print("WATCHING: remote output is already complete")
+        else:
+            pid = _launch(args, config, remote_output)
+            print(f"STARTED: remote PID {pid}")
+
+        ssh_failures = 0
+        launch_deadline = time.monotonic() + max(30.0, args.poll_seconds * 2)
+        while True:
+            try:
+                status = _read_status(args, remote_output)
+                ssh_failures = 0
+            except (ControllerError, OSError) as exc:
+                ssh_failures += 1
+                print(f"WARN: status check failed ({ssh_failures}/{args.max_ssh_failures}): {exc}")
+                if ssh_failures > args.max_ssh_failures:
+                    raise ControllerError(
+                        "SSH status checks failed repeatedly; leaving VM and artifacts untouched"
+                    ) from exc
+                time.sleep(args.poll_seconds)
+                continue
+
+            print(
+                f"STATUS: {status.state} pid={status.pid} "
+                f"tokens={status.unique_tokens}/{status.target_tokens} reason={status.reason}",
+                flush=True,
+            )
+            if status.state == "completed":
+                break
+            if status.state == "interrupted":
+                raise ControllerError(
+                    "remote training ended without a completed segment; "
+                    "leaving VM available for resume"
+                )
+            if status.state == "not_started" and time.monotonic() > launch_deadline:
+                raise ControllerError(
+                    "remote process exited before creating a training segment; cleanup skipped"
+                )
+            time.sleep(args.poll_seconds)
+
+        print("INFO: training completed; transferring artifacts")
+        _transfer(args, remote_output)
+        _verify_transfer(args, remote_output)
+        if args.delete_remote_output:
+            _delete_remote_output(args, remote_output)
+        _cleanup(args)
+        _notify("Training completed, artifacts verified, and VM cleanup finished", enabled=not args.no_notify)
+        print("PASS: start-and-watch finished")
+        return 0
+    except (ControllerError, OSError, subprocess.SubprocessError) as exc:
+        _notify(f"Training controller stopped: {exc}", enabled=not args.no_notify)
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

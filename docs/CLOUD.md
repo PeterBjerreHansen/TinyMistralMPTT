@@ -128,3 +128,63 @@ For a locked campaign, Phase-A initialization and Phase-B training should use
 the same pinned core data artifact as the reported validation split. Keep the
 entire generated run directory on persistent storage and back it up separately
 from an ephemeral instance.
+
+## Unattended start, transfer, and cleanup
+
+`scripts/start-and-watch` runs the training process in the VM, watches the
+durable `segments.jsonl` journal, transfers the completed output, verifies a
+SHA-256 manifest, and only then performs the requested VM cleanup. It does not
+estimate completion from elapsed time. If the process exits without a completed
+segment, it fails closed and leaves the VM available for recovery.
+
+The default cleanup is `shutdown`. `--cleanup delete` deletes only the compute
+instance; it deliberately leaves attached volumes in place. Use
+`--transfer metadata` only for a smoke check or when large checkpoints and
+weights have already been archived elsewhere. Serious runs should use the
+default `--transfer all`.
+
+Example for a serious run:
+
+```bash
+./scripts/start-and-watch \
+  --host <vm-ip> \
+  --vm-id <verda-vm-id> \
+  --config benchmarks/development/stage_5_cloud_100m/vanilla_100m.yaml \
+  --remote-output benchmarks/development/stage_5_cloud_100m/results/generated/vanilla_100m \
+  --local-output benchmarks/core/stage_5_cloud_100m_baseline/results/generated/vanilla_100m \
+  --start-vm \
+  --cleanup delete
+```
+
+The local computer must remain powered on while the controller is running.
+To detach it from the active Codex turn, launch it from a terminal with
+`nohup` and keep its log locally:
+
+```bash
+nohup ./scripts/start-and-watch <same-options-as-above> \
+  > /tmp/tinymistral-start-and-watch.log 2>&1 &
+echo $!
+```
+
+The script sends a macOS notification on success or failure when
+`osascript` is available. It continues independently of Codex and does not
+consume model tokens while waiting between status checks.
+
+For a sequential campaign, use `scripts/run-cloud-campaign`. It applies the
+same transfer and checksum boundary to each selected Stage-5 arm, removes the
+verified remote run directory before shutdown, and deletes the compute instance
+after all arms complete. It is restartable because locally complete arms are
+skipped:
+
+```bash
+nohup caffeinate -dimsu ./scripts/run-cloud-campaign \
+  --host <vm-ip> \
+  --vm-id <verda-vm-id> \
+  > /tmp/tinymistral-cloud-campaign.log 2>&1 &
+echo $!
+```
+
+The campaign keeps the persistent OS volume by omitting `--with-volumes` from
+the final Verda delete operation. On failure it shuts down the compute
+instance but retains remote artifacts for recovery; it does not delete a
+failed run's data.

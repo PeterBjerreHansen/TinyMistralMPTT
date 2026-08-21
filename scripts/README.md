@@ -52,6 +52,19 @@ generate.py
 It validates the manifest, exercises every sampled pass depth with a one-batch
 forward/backward preflight, and then runs selected arms sequentially:
 
+`start-and-watch` is the unattended cloud wrapper. It starts a remote
+`train.py --resume-auto` process, waits for a durable completed segment,
+transfers the output, verifies SHA-256 hashes, and then shuts down or deletes
+the Verda compute instance. It leaves the VM untouched when a run is
+interrupted or transfer verification fails. Run `--help` for the full
+interface; use `--transfer metadata` only for small smoke checks.
+
+`run-cloud-campaign` applies that lifecycle to the locked Stage-5 100M arms
+sequentially. It skips locally complete arms, transfers full artifacts, deletes
+each verified remote run directory, shuts down between arms, and deletes the
+compute instance after the selected campaign. A lock file prevents two
+campaigns from using the same VM concurrently.
+
 ```bash
 uv run python scripts/run_study.py \
   --study-dir benchmarks/development/stage_1_wiring \

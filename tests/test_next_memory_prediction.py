@@ -12,6 +12,7 @@ from tiny_mistral_mptt.config import ExperimentConfig
 from tiny_mistral_mptt.model_factory import build_variant
 from tiny_mistral_mptt.nmp import (
     LatentPredictionHead,
+    normalize_nmp_target,
     next_strict_true_indices,
     recurrent_nmp_pass_loss,
     tape_nmp_pass_loss,
@@ -77,6 +78,23 @@ def test_predictor_construction_does_not_advance_global_rng():
     before = torch.get_rng_state().clone()
     _make_head()
     torch.testing.assert_close(torch.get_rng_state(), before, atol=0, rtol=0)
+
+
+def test_rms_nmp_target_normalization_matches_model_rms_without_learned_gain():
+    states = torch.tensor([[[3.0, 4.0], [0.0, 2.0]]])
+    normalized = normalize_nmp_target(states, normalization="rms", eps=1e-6)
+    expected = states * torch.rsqrt(states.square().mean(dim=-1, keepdim=True) + 1e-6)
+    torch.testing.assert_close(normalized, expected)
+    torch.testing.assert_close(
+        normalized.square().mean(dim=-1), torch.ones(1, 2), atol=1e-6, rtol=1e-6
+    )
+
+
+def test_nmp_target_normalization_rejects_unknown_mode():
+    with pytest.raises(ValueError, match="target normalization"):
+        normalize_nmp_target(
+            torch.ones(1, 1, 2), normalization="norm_match", eps=1e-6
+        )
 
 
 def test_next_index_scan_is_strict_and_uses_sentinel_for_no_future_target():
@@ -260,6 +278,83 @@ def test_recirculation_nmp_uses_captured_internal_source_not_top_hidden():
     selected = model._source_component(run, "recurrent")
     assert selected.data_ptr() == run.feedback_source.data_ptr()
     assert selected.data_ptr() != run.hidden_states.data_ptr()
+
+
+def test_recurrent_nmp_defaults_to_detached_rms_normalized_source_target(monkeypatch):
+    import tiny_mistral_mptt.variants.multipass as multipass_module
+
+    model = memory_add_with_nmp().eval()
+    ids = torch.tensor([[1, 2, 3, 4, 5, 6]])
+    expected_run = model._run_passes(ids, passes=2, phase="B")[-1]
+    expected = normalize_nmp_target(
+        model._source_component(expected_run, "recurrent"),
+        normalization="rms",
+        eps=float(model.config.rms_norm_eps),
+    )
+    seen: list[torch.Tensor] = []
+    original = multipass_module.recurrent_nmp_pass_loss
+
+    def recording_loss(predictions, *, final_targets, ordinary_mask):
+        seen.append(final_targets)
+        return original(
+            predictions,
+            final_targets=final_targets,
+            ordinary_mask=ordinary_mask,
+        )
+
+    monkeypatch.setattr(multipass_module, "recurrent_nmp_pass_loss", recording_loss)
+    model.compute_loss(ids, passes=2, loss_weights=[0.0, 1.0])
+    assert len(seen) == 2
+    torch.testing.assert_close(seen[0], expected)
+    assert not seen[0].requires_grad
+    valid = torch.ones(seen[0].shape[:2], dtype=torch.bool)
+    torch.testing.assert_close(
+        seen[0][valid].square().mean(), torch.ones(()), atol=1e-5, rtol=1e-5
+    )
+
+
+def test_recurrent_nmp_raw_target_remains_available_as_an_ablation():
+    model = build_variant(
+        "memory_add",
+        backbone(),
+        recurrent_nmp_weight=0.1,
+        recurrent_nmp_target_normalization="none",
+    ).eval()
+    ids = torch.tensor([[1, 2, 3, 4, 5, 6]])
+    run = model._run_passes(ids, passes=2, phase="B")[-1]
+    source = model._source_component(run, "recurrent")
+    assert model.recurrent_nmp_target_normalization == "none"
+    torch.testing.assert_close(
+        normalize_nmp_target(
+            source, normalization=model.recurrent_nmp_target_normalization, eps=1e-6
+        ),
+        source,
+    )
+
+
+def test_recurrent_nmp_raw_ablation_still_detaches_target(monkeypatch):
+    import tiny_mistral_mptt.variants.multipass as multipass_module
+
+    model = build_variant(
+        "memory_add",
+        backbone(),
+        recurrent_nmp_weight=0.1,
+        recurrent_nmp_target_normalization="none",
+    ).eval()
+    seen: list[torch.Tensor] = []
+    original = multipass_module.recurrent_nmp_pass_loss
+
+    def recording_loss(predictions, *, final_targets, ordinary_mask):
+        seen.append(final_targets)
+        return original(
+            predictions,
+            final_targets=final_targets,
+            ordinary_mask=ordinary_mask,
+        )
+
+    monkeypatch.setattr(multipass_module, "recurrent_nmp_pass_loss", recording_loss)
+    model.compute_loss(torch.tensor([[1, 2, 3, 4]]), passes=2)
+    assert seen and not seen[0].requires_grad
 
 
 def test_tape_nmp_target_is_final_pass_post_writer_state(monkeypatch):

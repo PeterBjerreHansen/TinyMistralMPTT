@@ -77,6 +77,14 @@ def test_unvalidated_autocast_dtype_is_rejected():
         _config(autocast_dtype="float16")
 
 
+def test_recurrent_nmp_target_normalization_defaults_to_rms_and_validates():
+    cfg = _config(variant="recirculation", recirculation_source_layer=2, recirculation_destination_layer=0)
+    assert cfg.recurrent_nmp_target_normalization == "rms"
+
+    with pytest.raises(ValueError, match="recurrent_nmp_target_normalization"):
+        _config(recurrent_nmp_target_normalization="norm_match")
+
+
 
 def test_tape_config_requires_coherent_write_policy():
     dense = _config(variant="tape", memory_write_mode="dense")

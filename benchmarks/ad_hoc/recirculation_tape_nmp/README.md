@@ -41,10 +41,11 @@ done
 ```
 
 The script evaluates the same eight training blocks at fixed K=2 without
-updating weights. It reports NTP loss, raw recurrent NMP loss, raw sparse-tape
-NMP loss, target RMS, and the weighted auxiliary contribution. The three files
-only vary the proposed coefficients (`low`, `default`, `high`), so the raw
-objective comparison is not confounded by optimization.
+updating weights. It reports NTP loss, RMS-normalized recurrent NMP loss, raw
+post-writer sparse-tape NMP loss, target RMS, and the weighted auxiliary
+contribution. The three files only vary the proposed coefficients (`low`,
+`default`, `high`), so the objective comparison is not confounded by
+optimization.
 
 After 10M NTP, repeat the same commands without `--checkpoint`; each diagnostic
 config then uses the declared 10M parent automatically. The first acceptance
@@ -72,6 +73,5 @@ experiments, not fresh-data generalization estimates.
 
 The intended comparison is whether sparse tape NMP improves long-horizon
 prediction without harming NTP, and whether adding recurrent NMP provides an
-additional benefit. Do not increase the recurrent coefficient merely because
-its raw recirculation loss is larger: the internal source has a much larger
-target RMS than the post-writer tape representation.
+additional benefit. The recurrent target is RMS-normalized by default; use the
+raw-state mode only as an explicit ablation.

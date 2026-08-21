@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""Run the remaining locked cloud arms sequentially and archive each one.
+
+The campaign is restartable: a locally complete arm is skipped, while an
+incomplete arm is handed to start-and-watch for remote resume/transfer.
+"""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+
+ARMS = (
+    "memory_add_100m",
+    "recirculation_adaptive_100m",
+    "tape_dense_100m",
+    "tape_periodic32_100m",
+    "tape_memory_token32_100m",
+    "hybrid_100m",
+    "hybrid_recirculation_100m",
+)
+DEFAULT_REMOTE_ROOT = "/root/TinyMistralMPTT"
+DEFAULT_STUDY_DIR = "benchmarks/development/stage_5_cloud_100m"
+DEFAULT_LOCAL_ROOT = "benchmarks/core/stage_5_cloud_100m_baseline/results/generated"
+DEFAULT_LOCK = "/tmp/tinymistral-cloud-campaign.lock"
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _run(command: list[str], *, check: bool = True) -> int:
+    print("$ " + " ".join(_quote(item) for item in command), flush=True)
+    result = subprocess.run(command, cwd=_repo_root(), check=False)
+    if check and result.returncode != 0:
+        raise RuntimeError(f"command failed with exit code {result.returncode}")
+    return result.returncode
+
+
+def _quote(value: str) -> str:
+    if value and all(character.isalnum() or character in "-._/:" for character in value):
+        return value
+    return repr(value)
+
+
+def _local_complete(path: Path) -> bool:
+    required = (path / "run.json", path / "segments.jsonl", path / "checkpoints/latest.json")
+    if not all(item.is_file() for item in required):
+        return False
+    last_end = None
+    try:
+        for line in (path / "segments.jsonl").read_text(encoding="utf-8").splitlines():
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("event") == "segment_end":
+                last_end = record
+    except OSError:
+        return False
+    return bool(last_end and last_end.get("reason") == "completed")
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Run the locked Stage-5 cloud arms one at a time and archive them locally."
+    )
+    parser.add_argument("--host", required=True, help="Verda VM hostname or IP")
+    parser.add_argument("--vm-id", required=True, help="Verda VM ID")
+    parser.add_argument("--remote-root", default=DEFAULT_REMOTE_ROOT)
+    parser.add_argument("--study-dir", default=DEFAULT_STUDY_DIR)
+    parser.add_argument("--local-root", type=Path, default=Path(DEFAULT_LOCAL_ROOT))
+    parser.add_argument(
+        "--arm",
+        dest="arms",
+        action="append",
+        choices=ARMS,
+        help="run only this arm; repeat for a selected subset (default: all remaining arms)",
+    )
+    parser.add_argument("--ssh-key", type=Path, default=Path("~/.ssh/id_ed25519").expanduser())
+    parser.add_argument("--verda", default="verda")
+    parser.add_argument("--poll-seconds", type=float, default=60.0)
+    parser.add_argument("--lock-file", type=Path, default=Path(DEFAULT_LOCK))
+    parser.add_argument("--keep-vm", action="store_true", help="do not delete the VM after all arms")
+    parser.add_argument("--no-notify", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    return parser
+
+
+def _controller_command(args: argparse.Namespace, arm: str) -> list[str]:
+    config = f"{args.study_dir}/{arm}.yaml"
+    remote_output = f"{args.study_dir}/results/generated/{arm}"
+    local_output = (args.local_root / arm).resolve()
+    command = [
+        str(_repo_root() / "scripts" / "start-and-watch"),
+        "--host",
+        args.host,
+        "--vm-id",
+        args.vm_id,
+        "--remote-root",
+        args.remote_root,
+        "--config",
+        config,
+        "--remote-output",
+        remote_output,
+        "--local-output",
+        str(local_output),
+        "--ssh-key",
+        str(args.ssh_key),
+        "--verda",
+        args.verda,
+        "--start-vm",
+        "--watch-existing",
+        "--cleanup",
+        "shutdown",
+        "--transfer",
+        "all",
+        "--delete-remote-output",
+        "--poll-seconds",
+        str(args.poll_seconds),
+    ]
+    if args.no_notify:
+        command.append("--no-notify")
+    return command
+
+
+def _delete_vm(args: argparse.Namespace) -> None:
+    # The persistent OS volume is deliberately retained by omitting
+    # --with-volumes; only the compute instance is deleted.
+    _run(
+        [
+            args.verda,
+            "--agent",
+            "vm",
+            "delete",
+            "--id",
+            args.vm_id,
+            "--wait",
+            "--yes",
+        ]
+    )
+
+
+def _best_effort_shutdown(args: argparse.Namespace) -> None:
+    print("WARN: attempting best-effort VM shutdown after campaign failure", flush=True)
+    _run(
+        [
+            args.verda,
+            "--agent",
+            "vm",
+            "shutdown",
+            "--id",
+            args.vm_id,
+            "--wait",
+            "--yes",
+        ],
+        check=False,
+    )
+
+
+def main() -> int:
+    args = _parser().parse_args()
+    args.local_root = args.local_root.expanduser().resolve()
+    args.ssh_key = args.ssh_key.expanduser()
+    arms = tuple(args.arms or ARMS)
+    if args.poll_seconds <= 0:
+        raise SystemExit("--poll-seconds must be positive")
+    if not args.dry_run and not args.ssh_key.is_file():
+        raise SystemExit(f"SSH key does not exist: {args.ssh_key}")
+
+    print(f"INFO: campaign arms: {', '.join(arms)}")
+    print(f"INFO: local root: {args.local_root}")
+    print(f"INFO: final VM action: {'keep' if args.keep_vm else 'delete compute instance'}")
+    if args.dry_run:
+        for arm in arms:
+            print("DRY-RUN: " + " ".join(_quote(item) for item in _controller_command(args, arm)))
+        return 0
+
+    args.lock_file.parent.mkdir(parents=True, exist_ok=True)
+    with args.lock_file.open("w", encoding="utf-8") as lock_handle:
+        try:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise SystemExit(f"another cloud campaign is already running: {args.lock_file}") from exc
+
+        try:
+            args.local_root.mkdir(parents=True, exist_ok=True)
+            for index, arm in enumerate(arms, start=1):
+                local_output = args.local_root / arm
+                print(f"\n=== ARM {index}/{len(arms)}: {arm} ===", flush=True)
+                if _local_complete(local_output):
+                    print(f"SKIP: local artifacts are already complete: {local_output}", flush=True)
+                    continue
+                print(f"RUN: transferring full artifacts to {local_output}", flush=True)
+                _run(_controller_command(args, arm))
+                if not _local_complete(local_output):
+                    raise RuntimeError(f"controller returned success but local arm is incomplete: {local_output}")
+                print(f"PASS: local artifacts complete: {local_output}", flush=True)
+
+            if args.keep_vm:
+                print("PASS: campaign complete; VM retained by request", flush=True)
+            else:
+                print("INFO: all selected arms complete; deleting compute instance", flush=True)
+                _delete_vm(args)
+                print("PASS: campaign complete; compute instance deleted", flush=True)
+            return 0
+        except KeyboardInterrupt:
+            _best_effort_shutdown(args)
+            print("ERROR: campaign interrupted; VM was shut down, artifacts were retained", file=sys.stderr)
+            return 130
+        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            _best_effort_shutdown(args)
+            print(f"ERROR: campaign stopped: {exc}", file=sys.stderr)
+            return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

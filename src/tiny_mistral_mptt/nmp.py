@@ -9,6 +9,40 @@ import torch.nn.functional as F
 from tiny_mistral.modeling import MistralRMSNorm
 
 
+NMP_TARGET_NORMALIZATIONS = {"none", "rms"}
+
+
+def normalize_nmp_target(
+    states: torch.Tensor,
+    *,
+    normalization: str,
+    eps: float,
+) -> torch.Tensor:
+    """Apply the configured parameter-free normalization to NMP targets.
+
+    ``rms`` deliberately matches the variance calculation used by the
+    model's RMSNorm, but omits its learned feature-wise gain.  Target
+    normalization must not add trainable parameters or create a gradient path
+    through the future memory.  ``none`` is the exact stored representation.
+    """
+
+    if normalization not in NMP_TARGET_NORMALIZATIONS:
+        raise ValueError(
+            "NMP target normalization must be one of "
+            f"{sorted(NMP_TARGET_NORMALIZATIONS)}"
+        )
+    if not math.isfinite(float(eps)) or eps <= 0:
+        raise ValueError("NMP target normalization eps must be finite and positive")
+    if not states.is_floating_point():
+        raise ValueError("NMP targets must have a floating-point dtype")
+    if normalization == "none":
+        return states
+    values = states.to(torch.float32)
+    variance = values.square().mean(dim=-1, keepdim=True)
+    normalized = values * torch.rsqrt(variance + float(eps))
+    return normalized.to(states.dtype)
+
+
 class LatentPredictionHead(nn.Module):
     """Predict a future memory from one current top-layer hidden state.
 

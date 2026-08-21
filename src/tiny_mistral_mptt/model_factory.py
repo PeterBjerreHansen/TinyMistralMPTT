@@ -41,6 +41,7 @@ def build_variant(
     recirculation_mode: str = "fixed",
     recurrent_nmp_weight: float = 0.0,
     tape_nmp_weight: float = 0.0,
+    recurrent_nmp_target_normalization: str = "rms",
     nmp_projection_factor: float = 1.3,
 ) -> ExperimentalVariant:
     if name == "vanilla":
@@ -132,6 +133,7 @@ def build_variant(
         variant.configure_nmp(
             recurrent_weight=recurrent_nmp_weight,
             tape_weight=tape_nmp_weight,
+            recurrent_target_normalization=recurrent_nmp_target_normalization,
             projection_factor=nmp_projection_factor,
             initialization_seed=architecture_seed,
         )
@@ -163,6 +165,7 @@ def load_variant(
     recirculation_mode: str = "fixed",
     recurrent_nmp_weight: float = 0.0,
     tape_nmp_weight: float = 0.0,
+    recurrent_nmp_target_normalization: str = "rms",
     nmp_projection_factor: float = 1.3,
 ) -> ExperimentalVariant:
     backbone = load_model(
@@ -189,6 +192,7 @@ def load_variant(
         recirculation_mode=recirculation_mode,
         recurrent_nmp_weight=recurrent_nmp_weight,
         tape_nmp_weight=tape_nmp_weight,
+        recurrent_nmp_target_normalization=recurrent_nmp_target_normalization,
         nmp_projection_factor=nmp_projection_factor,
     )
 
@@ -220,5 +224,6 @@ def load_variant_from_config(
         recirculation_mode=cfg.recirculation_mode,
         recurrent_nmp_weight=cfg.recurrent_nmp_weight,
         tape_nmp_weight=cfg.tape_nmp_weight,
+        recurrent_nmp_target_normalization=cfg.recurrent_nmp_target_normalization,
         nmp_projection_factor=cfg.nmp_projection_factor,
     )

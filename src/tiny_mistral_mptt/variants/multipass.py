@@ -9,7 +9,13 @@ import torch
 from tiny_mistral.modeling import LayerKVCache, MistralForCausalLM
 
 from ..feedback import HybridPassSource
-from ..nmp import LatentPredictionHead, recurrent_nmp_pass_loss, tape_nmp_pass_loss
+from ..nmp import (
+    NMP_TARGET_NORMALIZATIONS,
+    LatentPredictionHead,
+    normalize_nmp_target,
+    recurrent_nmp_pass_loss,
+    tape_nmp_pass_loss,
+)
 from ..training.loss import causal_lm_loss_from_labels, normalize_pass_weights
 from .base import ExperimentalVariant, TrainOutput
 
@@ -76,12 +82,14 @@ class MultiPassVariant(ExperimentalVariant):
         self.tape_nmp_predictor: LatentPredictionHead | None = None
         self.recurrent_nmp_weight = 0.0
         self.tape_nmp_weight = 0.0
+        self.recurrent_nmp_target_normalization = "rms"
 
     def configure_nmp(
         self,
         *,
         recurrent_weight: float,
         tape_weight: float,
+        recurrent_target_normalization: str = "rms",
         projection_factor: float,
         initialization_seed: int,
     ) -> None:
@@ -100,6 +108,11 @@ class MultiPassVariant(ExperimentalVariant):
                 or value < 0
             ):
                 raise ValueError(f"{name} must be finite and non-negative")
+        if recurrent_target_normalization not in NMP_TARGET_NORMALIZATIONS:
+            raise ValueError(
+                "recurrent_target_normalization must be one of "
+                f"{sorted(NMP_TARGET_NORMALIZATIONS)}"
+            )
         if recurrent_weight and not self.supports_recurrent_nmp:
             raise ValueError(f"{self.variant_name} does not expose a recurrent NMP target")
         if tape_weight and not self.supports_tape_nmp:
@@ -120,6 +133,7 @@ class MultiPassVariant(ExperimentalVariant):
             )
         self.recurrent_nmp_weight = float(recurrent_weight)
         self.tape_nmp_weight = float(tape_weight)
+        self.recurrent_nmp_target_normalization = str(recurrent_target_normalization)
 
     def added_parameters(self):
         if self.recurrent_nmp_predictor is not None:
@@ -449,7 +463,12 @@ class MultiPassVariant(ExperimentalVariant):
         ordinary_mask = ~self.control_token_mask(input_ids)
 
         if self.recurrent_nmp_predictor is not None:
-            final_target = self._source_component(runs[-1], "recurrent").detach()
+            with torch.no_grad():
+                final_target = normalize_nmp_target(
+                    self._source_component(runs[-1], "recurrent"),
+                    normalization=self.recurrent_nmp_target_normalization,
+                    eps=float(self.config.rms_norm_eps),
+                ).detach()
             nmp_losses: list[torch.Tensor] = []
             target_rms = target_std = None
             for index, run in enumerate(runs):

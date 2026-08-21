@@ -1,7 +1,8 @@
 # Wired-checkpoint diagnostic baseline
 
-These measurements were obtained without optimizer updates on the completed
-Stage-2 Recirculation–Tape checkpoint:
+These historical measurements were obtained without optimizer updates on the
+completed Stage-2 Recirculation–Tape checkpoint, before recurrent NMP target
+normalization was added:
 
 `benchmarks/development/stage_2_local_smoke/results/generated/hybrid_recirculation_smoke/checkpoints/checkpoint_000001048576.pt`
 
@@ -10,14 +11,18 @@ The script evaluated eight pilot training blocks at K=2 on MPS.
 | Quantity | Value | Relative to NTP |
 | --- | ---: | ---: |
 | NTP loss | 1.9425 | 1.00x |
-| recurrent NMP loss | 11.5173 | 5.93x |
+| raw recurrent NMP loss | 11.5173 | 5.93x |
 | sparse Tape NMP loss | 0.8609 | 0.44x |
 | recurrent target RMS | 19.3580 | — |
 | sparse Tape target RMS | 1.6022 | — |
 
-The recurrent target is the adaptive Recirculation source-layer state, so its
-raw Smooth-L1 scale is much larger than the post-writer tape target. This is
-expected and is why the default coefficients are asymmetric:
+The recurrent target was the adaptive Recirculation source-layer state in this
+old raw-state measurement, so its Smooth-L1 scale was much larger than the
+post-writer tape target. Current code applies parameter-free RMS normalization
+to recurrent NMP by default, so these raw values are not the current expected
+diagnostic scale. Re-run the diagnostics after the 10M NTP parent exists; the
+recurrent target RMS should then be close to one and the auxiliary coefficient
+comparison should be made using the new metrics:
 
 | Diagnostic setting | Recurrent weight | Tape weight | Weighted NMP / NTP |
 | --- | ---: | ---: | ---: |

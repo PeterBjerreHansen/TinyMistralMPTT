@@ -20,13 +20,17 @@ pass and is detached.
 Recurrent NMP predicts the memory emitted at the next linguistic token:
 
 ```text
-P_recurrent(h_t^k) -> stop_gradient(r_(t+1)^K)
+P_recurrent(h_t^k) -> stop_gradient(RMS(r_(t+1)^K))
 ```
 
 `r` is semantic and architecture-specific. MemoryAdd uses the top hidden state;
 Recirculation uses its captured source-layer state. Hybrids use their recurrent
-component. Explicit `<MEM>` controls are skipped when finding the next
-linguistic token.
+component. The default target RMS-normalization uses the same parameter-free
+variance calculation as Mistral RMSNorm, without applying a learned gain. This
+removes the arbitrary residual-stream amplitude that `_norm_match` discards at
+routing time. Set `recurrent_nmp_target_normalization: none` for the raw-state
+ablation. Explicit `<MEM>` controls are skipped when finding the next linguistic
+token.
 
 Tape NMP predicts the first strictly later stored memory:
 
@@ -37,7 +41,9 @@ P_tape(h_t^k) -> stop_gradient(writer(s_w(t)^K))
 
 The existing dense, periodic, or explicit-memory-token write policy defines
 `w(t)`. The target is post-writer because that is the representation read from
-the tape. Query positions must be linguistic; write positions may be controls.
+the tape; no pre-writer state is cached or used as a tape target. Tape targets
+are left in their exact post-writer scale by default. Query positions must be
+linguistic; write positions may be controls.
 In memory-token mode, a future `<MEM>` can have linguistic distance zero from
 the preceding token even though its physical index is strictly greater.
 
