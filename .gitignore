@@ -27,6 +27,9 @@ data/dolmino/pilot_2048/*
 !data/dolmino/gpu_2048/
 data/dolmino/gpu_2048/*
 !data/dolmino/gpu_2048/config.yaml
+!data/dolmino/gpu_2048_staged/
+data/dolmino/gpu_2048_staged/*
+!data/dolmino/gpu_2048_staged/config.yaml
 
 # Training outputs remain colocated with their study/control but are not source.
 benchmarks/**/results/generated/
