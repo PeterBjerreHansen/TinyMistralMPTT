@@ -30,6 +30,37 @@ def _load_arm_configs(study_dir: Path) -> dict[str, Path]:
     }
 
 
+def _output_dir_for_config(config_path: Path, *, root: Path) -> Path:
+    """Resolve a config's output directory in the same way training does."""
+    output_dir = Path(load_experiment_config(config_path).output_dir)
+    return output_dir if output_dir.is_absolute() else root / output_dir
+
+
+def _has_training_trajectory(config_path: Path, *, root: Path) -> bool:
+    """Return whether an output directory contains a trajectory to recover.
+
+    ``Trainer`` treats a run journal as authoritative and refuses ambiguous
+    partial artifacts.  Looking for either the journal or the metrics/segment
+    logs here lets the launcher select ``--resume-auto`` only for an existing
+    trajectory, while preserving ``init_from`` for a fresh Phase-B run.
+    """
+    output_dir = _output_dir_for_config(config_path, root=root)
+    return any(
+        (output_dir / filename).is_file()
+        for filename in ("run.json", "metrics.jsonl", "segments.jsonl")
+    ) or (output_dir / "checkpoints").is_dir()
+
+
+def _should_resume_auto(config_path: Path, *, root: Path) -> bool:
+    """Choose automatic recovery for this config without overriding init-from."""
+    cfg = load_experiment_config(config_path)
+    if cfg.resume_from is not None:
+        return False
+    if cfg.init_from is not None and not _has_training_trajectory(config_path, root=root):
+        return False
+    return True
+
+
 def _wire_arm(config_path: Path, *, wire_device: str | None) -> None:
     cfg = load_experiment_config(config_path)
     if wire_device is not None:
@@ -145,7 +176,7 @@ def main() -> None:
             "--config",
             str(configs[arm_id]),
         ]
-        if not args.no_resume_auto:
+        if not args.no_resume_auto and _should_resume_auto(configs[arm_id], root=root):
             command.append("--resume-auto")
         if args.until_unique_tokens is not None:
             command.extend(["--until-unique-tokens", str(args.until_unique_tokens)])

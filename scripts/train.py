@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import signal
+from pathlib import Path
 
 from tiny_mistral.device import resolve_device
 from tiny_mistral_mptt.config import load_experiment_config
@@ -18,6 +19,14 @@ def _request_stop(signum, frame) -> None:  # pragma: no cover - OS integration
     del signum, frame
     global _STOP_REQUESTED
     _STOP_REQUESTED = True
+
+
+def _has_training_trajectory(output_dir: str) -> bool:
+    path = Path(output_dir)
+    return any(
+        (path / filename).is_file()
+        for filename in ("run.json", "metrics.jsonl", "segments.jsonl")
+    ) or (path / "checkpoints").is_dir()
 
 
 def main() -> None:
@@ -50,9 +59,21 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_experiment_config(args.config)
+    resume_auto = bool(args.resume_auto)
     if args.resume_from is not None:
         cfg.resume_from = args.resume_from
         cfg.init_from = None
+    elif resume_auto:
+        if cfg.init_from is not None and not _has_training_trajectory(cfg.output_dir):
+            # ``init_from`` is the correct first-run behavior for a config
+            # whose output directory is empty, even when a caller requested
+            # the convenient auto mode.
+            resume_auto = False
+        else:
+            # Once a trajectory exists, automatic recovery must take
+            # precedence over one-time model initialisation.
+            cfg.resume_from = None
+            cfg.init_from = None
     elif args.init_from is not None:
         cfg.init_from = args.init_from
         cfg.resume_from = None
@@ -83,7 +104,7 @@ def main() -> None:
         train_data=train_data,
         validation_data=validation_data,
         device=device,
-        resume_auto=args.resume_auto,
+        resume_auto=resume_auto,
         allow_source_mismatch=args.allow_source_mismatch,
         stop_requested=lambda: _STOP_REQUESTED,
     )
