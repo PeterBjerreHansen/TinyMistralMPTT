@@ -5,23 +5,26 @@ First resume each promoted Stage-3 seed to its declared 10M endpoint:
 ```bash
 uv run python scripts/run_study.py \
   --study-dir benchmarks/development/stage_3_cloud_pilot \
-  --skip-wire --arm vanilla_seed1337 --arm tape_seed1337 \
-  --arm hybrid_seed1337 --arm <selected-fast-seed1337>
+  --skip-wire --arm vanilla_seed1337 --arm tape_periodic32_seed1337 \
+  --arm hybrid_seed1337 --arm memory_add_seed1337
 ```
+
+The command shows periodic Tape and MemoryAdd as an example; replace those two
+arm IDs with the selections recorded at the Stage-3 gate.
 
 Then materialize the two additional-seed study. Choose the fast baseline using
 the Stage-3 gate:
 
 ```bash
 uv run python benchmarks/development/stage_4_confirmation/prepare.py \
-  --fast memory_add
+  --fast memory_add --tape periodic32
 uv run python scripts/verify_study.py \
   benchmarks/development/stage_4_confirmation
 uv run python scripts/run_study.py \
   --study-dir benchmarks/development/stage_4_confirmation --skip-wire
 ```
 
-`--fast` accepts `memory_add`, `fbt`, or `recirculation_adaptive`. Preparation
-fails rather than overwriting an existing selection; pass `--force` only when
-deliberately replacing a study that has not begun execution.
-
+`--fast` accepts `memory_add` or `recirculation_adaptive`; `--tape` accepts
+`dense`, `periodic32`, or `memory_token32`. Preparation fails rather than
+overwriting an existing selection; pass `--force` only when deliberately
+replacing a study that has not begun execution.

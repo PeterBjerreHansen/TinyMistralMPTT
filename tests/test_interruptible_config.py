@@ -9,9 +9,14 @@ def test_interruptible_checkpoint_defaults_are_safe():
     assert cfg.checkpoint_every_seconds == 0.0
 
 
-def test_checkpoint_retention_cannot_drop_to_one():
-    with pytest.raises(ValueError, match="at least 2"):
-        ExperimentConfig.from_dict({"checkpoint_keep_last": 1})
+def test_local_checkpoint_retention_can_drop_to_one():
+    cfg = ExperimentConfig.from_dict({"checkpoint_keep_last": 1})
+    assert cfg.checkpoint_keep_last == 1
+
+
+def test_checkpoint_retention_cannot_drop_below_one():
+    with pytest.raises(ValueError, match="at least 1"):
+        ExperimentConfig.from_dict({"checkpoint_keep_last": 0})
 
 
 def test_snapshot_thresholds_are_normalized():

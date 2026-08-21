@@ -46,7 +46,7 @@ def _config():
     }
 
 
-def _save(run: Path, model, optimizer, tokens: int, *, source=None):
+def _save(run: Path, model, optimizer, tokens: int, *, source=None, keep_last=2):
     return save_checkpoint_generation(
         run,
         model=model,
@@ -62,7 +62,7 @@ def _save(run: Path, model, optimizer, tokens: int, *, source=None):
         experiment_config=_config(),
         data_manifest_sha256="manifest",
         source_provenance=source,
-        keep_last=2,
+        keep_last=keep_last,
     )
 
 
@@ -84,6 +84,25 @@ def test_generation_retention_keeps_exactly_two(tmp_path):
     assert pointer["previous"] == "checkpoint_000000000016.pt"
     assert pointer["model_positions_seen"] == 27
     assert not (tmp_path / "latest.pt").exists()  # clean break: no compatibility link
+
+
+def test_local_single_generation_retention_has_no_fallback_pointer(tmp_path):
+    model, optimizer = _objects()
+    _save(tmp_path, model, optimizer, 8, keep_last=1)
+    _advance(model, optimizer)
+    current = _save(tmp_path, model, optimizer, 16, keep_last=1)
+
+    assert discover_checkpoint_generations(tmp_path) == [current]
+    pointer = json.loads((tmp_path / "checkpoints" / "latest.json").read_text())
+    assert pointer["current"] == "checkpoint_000000000016.pt"
+    assert pointer["previous"] is None
+    assert candidate_checkpoint_paths(tmp_path) == [current]
+
+
+def test_generation_retention_rejects_zero(tmp_path):
+    model, optimizer = _objects()
+    with pytest.raises(ValueError, match="keep_last>=1"):
+        _save(tmp_path, model, optimizer, 8, keep_last=0)
 
 
 def test_corrupt_newest_falls_back_to_previous(tmp_path):

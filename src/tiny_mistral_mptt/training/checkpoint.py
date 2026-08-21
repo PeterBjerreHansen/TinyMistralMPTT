@@ -238,9 +238,10 @@ def save_checkpoint_generation(
     checkpoint_metadata: dict[str, Any] | None = None,
     keep_last: int = 2,
 ) -> Path:
-    """Commit one resumable generation without risking the previous generation."""
-    if int(keep_last) < 2:
-        raise ValueError("generation checkpointing requires keep_last>=2")
+    """Commit one resumable generation, optionally retaining a fallback."""
+    keep_last = int(keep_last)
+    if keep_last < 1:
+        raise ValueError("generation checkpointing requires keep_last>=1")
     directory = checkpoint_directory(run_dir)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / checkpoint_filename(train_state.unique_tokens_seen)
@@ -263,7 +264,11 @@ def save_checkpoint_generation(
         raise RuntimeError("checkpoint verification returned the wrong token count")
 
     generations = discover_checkpoint_generations(run_dir)
-    previous = next((candidate.name for candidate in generations if candidate != path), None)
+    previous = None
+    if keep_last >= 2:
+        previous = next(
+            (candidate.name for candidate in generations if candidate != path), None
+        )
     pointer = {
         "format_version": 1,
         "current": path.name,
@@ -278,7 +283,7 @@ def save_checkpoint_generation(
     )
 
     # Prune only after the new payload and pointer are durable.
-    for candidate in generations[int(keep_last) :]:
+    for candidate in generations[keep_last:]:
         try:
             candidate.unlink()
         except FileNotFoundError:

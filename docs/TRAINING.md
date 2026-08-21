@@ -118,6 +118,11 @@ validation, so an interruption during validation does not lose the preceding
 optimizer work. Validation is read-only and should not implicitly alter the
 training protocol.
 
+`checkpoint_keep_last: 1` is supported for local runs where disk use matters;
+it retains only the newest verified generation and therefore cannot fall back
+if that file later becomes unreadable. Keep the default value `2` for cloud or
+other interruption-sensitive runs.
+
 Optional `snapshot_at_tokens` writes weights-only safetensors for scientific
 analysis. Snapshots never drive resume; resumable generation checkpoints remain
 the trajectory source of truth.

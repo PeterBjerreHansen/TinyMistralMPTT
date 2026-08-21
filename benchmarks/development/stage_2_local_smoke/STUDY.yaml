@@ -3,9 +3,9 @@ status: planned
 question: Do the wired feedback models remain stable when the backbone is unfrozen?
 arms:
   - {id: memory_add_smoke, config: memory_add_smoke.yaml}
-  - {id: fbt_smoke, config: fbt_smoke.yaml}
   - {id: recirculation_adaptive_smoke, config: recirculation_adaptive_smoke.yaml}
-  - {id: tape_smoke, config: tape_smoke.yaml}
+  - {id: tape_dense_smoke, config: tape_dense_smoke.yaml}
+  - {id: tape_periodic32_smoke, config: tape_periodic32_smoke.yaml}
+  - {id: tape_memory_token32_smoke, config: tape_memory_token32_smoke.yaml}
   - {id: hybrid_smoke, config: hybrid_smoke.yaml}
 comparisons: []
-

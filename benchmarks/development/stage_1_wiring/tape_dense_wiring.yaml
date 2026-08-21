@@ -1,9 +1,14 @@
-variant: fbt
+variant: tape
 phase: A
-prefix_mixin_probability: 0.0
+memory_window: 32
+memory_write_mode: dense
+memory_write_stride: null
+memory_token_visibility: null
+memory_layers: [3, 7]
+memory_position_encoding: rope
 model_dir: checkpoints/TinyMistral-248M-v3
 data_dir: data/dolmino/local_2048
-output_dir: benchmarks/development/stage_1_wiring/results/generated/fbt_wiring
+output_dir: benchmarks/development/stage_1_wiring/results/generated/tape_dense_wiring
 device: mps
 dtype: float32
 autocast_dtype: null
@@ -12,7 +17,7 @@ seed: 1337
 architecture_seed: 4242
 batch_size: 1
 grad_accum_steps: 1
-max_unique_tokens: 2097152
+max_unique_tokens: 5242880
 learning_rate: 1.0e-4
 pretrained_learning_rate: 0.0
 added_learning_rate: 1.0e-4
@@ -29,8 +34,7 @@ eval_passes: 4
 eval_batches: 32
 checkpoint_every_tokens: 524288
 checkpoint_every_seconds: 0.0
-checkpoint_keep_last: 2
-snapshot_at_tokens: [2097152]
+checkpoint_keep_last: 1
+snapshot_at_tokens: [5242880]
 resume_from: null
 init_from: null
-

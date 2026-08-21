@@ -296,8 +296,8 @@ class ExperimentConfig:
             raise ValueError("checkpoint_every_tokens must be non-negative")
         if not math.isfinite(float(self.checkpoint_every_seconds)) or self.checkpoint_every_seconds < 0:
             raise ValueError("checkpoint_every_seconds must be finite and non-negative")
-        if self.checkpoint_keep_last < 2:
-            raise ValueError("checkpoint_keep_last must be at least 2")
+        if self.checkpoint_keep_last < 1:
+            raise ValueError("checkpoint_keep_last must be at least 1")
         if self.snapshot_at_tokens is not None:
             if any(value <= 0 or value > self.max_unique_tokens for value in self.snapshot_at_tokens):
                 raise ValueError("snapshot_at_tokens values must lie in (0, max_unique_tokens]")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Materialize Stage-4 configs after selecting the fast-memory pilot arm."""
+"""Materialize Stage-4 configs after selecting fast and Tape pilot arms."""
 
 from __future__ import annotations
 
@@ -13,9 +13,10 @@ SEEDS = (2027, 4099)
 PILOT_CONFIGS = {
     "vanilla": "vanilla_seed1337.yaml",
     "memory_add": "memory_add_seed1337.yaml",
-    "fbt": "fbt_seed1337.yaml",
     "recirculation_adaptive": "recirculation_adaptive_seed1337.yaml",
-    "tape": "tape_seed1337.yaml",
+    "tape_dense": "tape_dense_seed1337.yaml",
+    "tape_periodic32": "tape_periodic32_seed1337.yaml",
+    "tape_memory_token32": "tape_memory_token32_seed1337.yaml",
     "hybrid": "hybrid_seed1337.yaml",
 }
 
@@ -25,7 +26,12 @@ def main() -> None:
     parser.add_argument(
         "--fast",
         required=True,
-        choices=("memory_add", "fbt", "recirculation_adaptive"),
+        choices=("memory_add", "recirculation_adaptive"),
+    )
+    parser.add_argument(
+        "--tape",
+        required=True,
+        choices=("dense", "periodic32", "memory_token32"),
     )
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
@@ -33,7 +39,7 @@ def main() -> None:
     stage_dir = Path(__file__).resolve().parent
     root = stage_dir.parents[2]
     pilot_dir = root / "benchmarks" / "development" / "stage_3_cloud_pilot"
-    selected = ("vanilla", args.fast, "tape", "hybrid")
+    selected = ("vanilla", args.fast, f"tape_{args.tape}", "hybrid")
     generated: list[tuple[str, str]] = []
 
     destinations = [stage_dir / "STUDY.yaml"]
@@ -76,7 +82,7 @@ def main() -> None:
         "name": "stage_4_confirmation",
         "status": "planned",
         "question": (
-            "Do sparse Tape and Hybrid replicate against the selected fast-memory "
+            "Do the selected Tape and Hybrid replicate against the selected fast-memory "
             "baseline across two additional Phase-B seeds?"
         ),
         "arms": [
@@ -89,7 +95,7 @@ def main() -> None:
         yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8"
     )
     print(
-        f"PASS: prepared Stage 4 fast={args.fast} "
+        f"PASS: prepared Stage 4 fast={args.fast} tape={args.tape} "
         f"arms={','.join(arm_id for arm_id, _ in generated)}"
     )
 

@@ -29,5 +29,6 @@ eval_every_tokens: 1024
 eval_passes: 1
 eval_batches: 2
 checkpoint_every_tokens: 2048
+checkpoint_keep_last: 1
 resume_from: null
 init_from: null
