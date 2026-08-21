@@ -409,7 +409,13 @@ def load_latest_valid_checkpoint(
         raise FileNotFoundError("no checkpoint generations found")
     errors: list[str] = []
     for index, path in enumerate(candidates):
+        if not path.exists():
+            errors.append(f"{path.name}: missing")
+            continue
         try:
+            # Inspect before mutating the live model/optimizer. A truncated
+            # newest generation must fall back without partially restoring it.
+            inspect_checkpoint(path)
             state, sampler = load_checkpoint(
                 path,
                 model=model,
