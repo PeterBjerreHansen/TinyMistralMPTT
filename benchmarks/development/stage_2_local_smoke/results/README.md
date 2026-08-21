@@ -2,4 +2,3 @@
 
 Retain the stability/go-no-go summary here. Raw artifacts belong in ignored
 `generated/<arm>/` directories.
-

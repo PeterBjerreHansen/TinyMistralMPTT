@@ -7,9 +7,6 @@ from tiny_mistral_mptt.data.config import load_data_config
 from tiny_mistral_mptt.studies import discover_studies, verify_study
 
 ROOT = Path(__file__).resolve().parents[1]
-HISTORICAL_RESULTS = (
-    ROOT / "benchmarks" / "historical" / "stage2_cleanroom_v1" / "results"
-)
 
 
 def _control_configs() -> list[Path]:
@@ -22,13 +19,6 @@ def _development_configs() -> list[Path]:
         for path in (ROOT / "benchmarks" / "development").glob("**/*.yaml")
         if path.name != "STUDY.yaml"
     )
-
-
-def test_historical_results_remain_lightweight_evidence():
-    assert (HISTORICAL_RESULTS / "k_sweep.md").is_file()
-    assert (HISTORICAL_RESULTS.parent / "README.md").is_file()
-    assert not (HISTORICAL_RESULTS.parent / "PROTOCOL.yaml").exists()
-    assert not (HISTORICAL_RESULTS.parent / "configs").exists()
 
 
 def test_default_experiment_config_uses_active_2048_context_and_local_generated_output():

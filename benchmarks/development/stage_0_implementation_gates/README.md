@@ -14,4 +14,3 @@ uv run python scripts/run_study.py \
 The final command constructs every architecture and runs both sampled pass
 depths through one forward/backward preflight. Freeze a clean source commit
 before starting Stage 1.
-
