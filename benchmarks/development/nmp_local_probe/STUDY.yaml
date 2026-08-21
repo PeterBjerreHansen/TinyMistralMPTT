@@ -1,0 +1,23 @@
+name: nmp_local_probe
+status: active
+question: Do causal recurrent, tape, and dual NMP objectives behave stably and improve short local continuations over matched NTP-only controls?
+arms:
+  - {id: memory_add_ntp, config: memory_add_ntp.yaml}
+  - {id: memory_add_nmp, config: memory_add_nmp.yaml}
+  - {id: tape_periodic32_ntp, config: tape_periodic32_ntp.yaml}
+  - {id: tape_periodic32_nmp, config: tape_periodic32_nmp.yaml}
+  - {id: hybrid_recirculation_ntp, config: hybrid_recirculation_ntp.yaml}
+  - {id: hybrid_recirculation_dual_nmp, config: hybrid_recirculation_dual_nmp.yaml}
+comparisons:
+  - name: memory_add_nmp_effect
+    arms: [memory_add_ntp, memory_add_nmp]
+    experimental_axes: [recurrent_nmp_weight, nmp_warmup_tokens]
+    allowed_differences: []
+  - name: tape_nmp_effect
+    arms: [tape_periodic32_ntp, tape_periodic32_nmp]
+    experimental_axes: [tape_nmp_weight, nmp_warmup_tokens]
+    allowed_differences: []
+  - name: hybrid_dual_nmp_effect
+    arms: [hybrid_recirculation_ntp, hybrid_recirculation_dual_nmp]
+    experimental_axes: [recurrent_nmp_weight, tape_nmp_weight, nmp_warmup_tokens]
+    allowed_differences: []
