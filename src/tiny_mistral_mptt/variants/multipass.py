@@ -13,6 +13,8 @@ from ..nmp import (
     NMP_TARGET_NORMALIZATIONS,
     LatentPredictionHead,
     normalize_nmp_target,
+    prepare_recurrent_nmp_alignment,
+    prepare_tape_nmp_alignment,
     recurrent_nmp_pass_loss,
     tape_nmp_pass_loss,
 )
@@ -428,6 +430,8 @@ class MultiPassVariant(ExperimentalVariant):
         phase: str = "B",
         passes: int = 1,
         loss_weights: Sequence[float] | None = None,
+        recurrent_nmp_loss_weights: Sequence[float] | None = None,
+        tape_nmp_loss_weights: Sequence[float] | None = None,
         nmp_weight_scale: float = 1.0,
     ) -> TrainOutput:
         if not 0.0 <= float(nmp_weight_scale) <= 1.0:
@@ -469,30 +473,76 @@ class MultiPassVariant(ExperimentalVariant):
                     normalization=self.recurrent_nmp_target_normalization,
                     eps=float(self.config.rms_norm_eps),
                 ).detach()
+                recurrent_alignment = prepare_recurrent_nmp_alignment(
+                    final_target,
+                    ordinary_mask=ordinary_mask,
+                )
+            recurrent_pass_weights = normalize_pass_weights(
+                recurrent_nmp_loss_weights,
+                passes,
+                device=loss.device,
+                dtype=loss.dtype,
+            )
             nmp_losses: list[torch.Tensor] = []
-            target_rms = target_std = None
+            nmp_diagnostics: list[dict[str, torch.Tensor]] = []
             for index, run in enumerate(runs):
                 # The predictor sees only h_t. No token embedding or x_{t+1}
                 # exists anywhere on this branch.
                 prediction = self.recurrent_nmp_predictor(run.hidden_states)
-                nmp_loss, target_rms, target_std = recurrent_nmp_pass_loss(
+                pass_diagnostics: dict[str, torch.Tensor] = {}
+                nmp_loss, _, _ = recurrent_nmp_pass_loss(
                     prediction,
-                    final_targets=final_target,
-                    ordinary_mask=ordinary_mask,
+                    alignment=recurrent_alignment,
+                    diagnostics=pass_diagnostics,
                 )
                 nmp_losses.append(nmp_loss)
-                metrics[f"recurrent_nmp_pass_{index + 1}_loss"] = float(
-                    nmp_loss.detach().cpu()
+                nmp_diagnostics.append(pass_diagnostics)
+            raw = sum(
+                weight * pass_loss
+                for weight, pass_loss in zip(
+                    recurrent_pass_weights, nmp_losses, strict=True
                 )
-            raw = torch.stack(nmp_losses).mean()
+            )
             weighted = raw * self.recurrent_nmp_weight * float(nmp_weight_scale)
             auxiliary_loss = auxiliary_loss + weighted
+            pass_loss_values = torch.stack(nmp_losses).detach().cpu().tolist()
+            pass_weight_values = recurrent_pass_weights.detach().cpu().tolist()
+            # Transfer each diagnostic vector once per objective, rather than
+            # synchronizing separately for every pass.
+            error_rms_values = torch.stack(
+                [item["error_rms"] for item in nmp_diagnostics]
+            ).detach().cpu().tolist()
+            linear_fraction_values = torch.stack(
+                [item["linear_fraction"] for item in nmp_diagnostics]
+            ).detach().cpu().tolist()
+            for index, (pass_loss, pass_weight, error_rms, linear_fraction) in enumerate(
+                zip(
+                    pass_loss_values,
+                    pass_weight_values,
+                    error_rms_values,
+                    linear_fraction_values,
+                    strict=True,
+                )
+            ):
+                metrics[f"recurrent_nmp_pass_{index + 1}_loss"] = pass_loss
+                metrics[f"recurrent_nmp_pass_{index + 1}_weight"] = pass_weight
+                metrics[f"recurrent_nmp_pass_{index + 1}_error_rms"] = error_rms
+                metrics[f"recurrent_nmp_pass_{index + 1}_linear_fraction"] = linear_fraction
+            recurrent_valid_count = float(
+                recurrent_alignment.valid.sum().detach().cpu()
+            )
             metrics.update(
                 {
                     "recurrent_nmp_loss": float(raw.detach().cpu()),
                     "recurrent_nmp_weighted_loss": float(weighted.detach().cpu()),
-                    "recurrent_nmp_target_rms": float(target_rms.detach().cpu()),
-                    "recurrent_nmp_target_feature_std": float(target_std.detach().cpu()),
+                    "recurrent_nmp_target_rms": float(
+                        recurrent_alignment.target_rms.detach().cpu()
+                    ),
+                    "recurrent_nmp_target_feature_std": float(
+                        recurrent_alignment.target_feature_std.detach().cpu()
+                    ),
+                    "recurrent_nmp_valid_queries": recurrent_valid_count,
+                    "recurrent_nmp_valid_events": recurrent_valid_count,
                 }
             )
 
@@ -505,42 +555,94 @@ class MultiPassVariant(ExperimentalVariant):
                 written_targets = self.nmp_written_states(final_tape_source).detach()
             write_mask = self.nmp_write_mask(input_ids)
             sequence_positions = self.nmp_sequence_positions(input_ids)
-            nmp_losses = []
-            distance_sums: dict[str, list[torch.Tensor]] = {}
-            target_rms = target_std = None
-            for index, run in enumerate(runs):
-                prediction = self.tape_nmp_predictor(run.hidden_states)
-                nmp_loss, target_rms, target_std, distances = tape_nmp_pass_loss(
-                    prediction,
-                    final_written_states=written_targets,
+            with torch.no_grad():
+                tape_alignment = prepare_tape_nmp_alignment(
+                    written_targets,
                     ordinary_mask=ordinary_mask,
                     write_mask=write_mask,
                     sequence_positions=sequence_positions,
                 )
-                nmp_losses.append(nmp_loss)
-                metrics[f"tape_nmp_pass_{index + 1}_loss"] = float(
-                    nmp_loss.detach().cpu()
+            tape_pass_weights = normalize_pass_weights(
+                tape_nmp_loss_weights,
+                passes,
+                device=loss.device,
+                dtype=loss.dtype,
+            )
+            nmp_losses = []
+            nmp_diagnostics = []
+            distance_values: dict[str, list[torch.Tensor]] = {
+                name: [] for name in tape_alignment.distance_masks
+            }
+            for index, run in enumerate(runs):
+                prediction = self.tape_nmp_predictor(run.hidden_states)
+                pass_diagnostics = {}
+                nmp_loss, _, _, distances = tape_nmp_pass_loss(
+                    prediction,
+                    alignment=tape_alignment,
+                    diagnostics=pass_diagnostics,
                 )
+                nmp_losses.append(nmp_loss)
                 for name, value in distances.items():
-                    distance_sums.setdefault(name, []).append(value)
-                    metrics[
-                        f"tape_nmp_pass_{index + 1}_distance_{name}_loss"
-                    ] = float(value.detach().cpu())
-            raw = torch.stack(nmp_losses).mean()
+                    distance_values[name].append(value)
+                nmp_diagnostics.append(pass_diagnostics)
+            raw = sum(
+                weight * pass_loss
+                for weight, pass_loss in zip(
+                    tape_pass_weights, nmp_losses, strict=True
+                )
+            )
             weighted = raw * self.tape_nmp_weight * float(nmp_weight_scale)
             auxiliary_loss = auxiliary_loss + weighted
+            pass_loss_values = torch.stack(nmp_losses).detach().cpu().tolist()
+            pass_weight_values = tape_pass_weights.detach().cpu().tolist()
+            error_rms_values = torch.stack(
+                [item["error_rms"] for item in nmp_diagnostics]
+            ).detach().cpu().tolist()
+            linear_fraction_values = torch.stack(
+                [item["linear_fraction"] for item in nmp_diagnostics]
+            ).detach().cpu().tolist()
+            for index, (pass_loss, pass_weight, error_rms, linear_fraction) in enumerate(
+                zip(
+                    pass_loss_values,
+                    pass_weight_values,
+                    error_rms_values,
+                    linear_fraction_values,
+                    strict=True,
+                )
+            ):
+                metrics[f"tape_nmp_pass_{index + 1}_loss"] = pass_loss
+                metrics[f"tape_nmp_pass_{index + 1}_weight"] = pass_weight
+                metrics[f"tape_nmp_pass_{index + 1}_error_rms"] = error_rms
+                metrics[f"tape_nmp_pass_{index + 1}_linear_fraction"] = linear_fraction
             metrics.update(
                 {
                     "tape_nmp_loss": float(raw.detach().cpu()),
                     "tape_nmp_weighted_loss": float(weighted.detach().cpu()),
-                    "tape_nmp_target_rms": float(target_rms.detach().cpu()),
-                    "tape_nmp_target_feature_std": float(target_std.detach().cpu()),
+                    "tape_nmp_target_rms": float(
+                        tape_alignment.target_rms.detach().cpu()
+                    ),
+                    "tape_nmp_target_feature_std": float(
+                        tape_alignment.target_feature_std.detach().cpu()
+                    ),
+                    "tape_nmp_valid_queries": float(
+                        tape_alignment.valid.sum().detach().cpu()
+                    ),
+                    "tape_nmp_valid_events": float(
+                        tape_alignment.present_events.sum().detach().cpu()
+                    ),
                 }
             )
-            for name, values in distance_sums.items():
-                metrics[f"tape_nmp_distance_{name}_loss"] = float(
-                    torch.stack(values).mean().detach().cpu()
-                )
+            distance_names = list(distance_values)
+            distance_matrix = torch.stack(
+                [torch.stack(distance_values[name]) for name in distance_names]
+            )
+            distance_means = distance_matrix.detach().cpu().mean(dim=1).tolist()
+            metrics.update(
+                {
+                    f"tape_nmp_distance_{name}_loss": value
+                    for name, value in zip(distance_names, distance_means, strict=True)
+                }
+            )
 
         if (
             self.recurrent_nmp_predictor is not None

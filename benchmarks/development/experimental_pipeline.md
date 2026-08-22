@@ -33,7 +33,7 @@ Phase A samples K=2 on 90% of batches and K=3 on 10%:
 ```yaml
 pass_schedule:
   - probabilities: {2: 0.9, 3: 0.1}
-pass_loss_weights_by_k:
+ntp_pass_loss_weights_by_k:
   2: [0.0, 1.0]
   3: [0.0, 0.0, 1.0]
 ```
@@ -42,7 +42,7 @@ This estimates `0.9 L2 + 0.1 L3` with 2.1 average passes rather than running
 three passes on every batch. Phase B retains a first-pass objective:
 
 ```yaml
-pass_loss_weights_by_k:
+ntp_pass_loss_weights_by_k:
   2: [0.1, 0.9]
   3: [0.1, 0.0, 0.9]
 ```

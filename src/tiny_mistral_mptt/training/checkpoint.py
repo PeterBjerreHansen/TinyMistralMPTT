@@ -293,6 +293,19 @@ def save_checkpoint_generation(
 
 
 def _resume_config_view(config: dict[str, Any]) -> dict[str, Any]:
+    # Canonicalize the pre-NMP generic NTP pass-weight names and fill defaults
+    # for fields introduced after older checkpoints were written. This keeps
+    # exact resume viable while making new configs self-describing.
+    canonical = dict(config)
+    if "ntp_pass_loss_weights" not in canonical:
+        canonical["ntp_pass_loss_weights"] = canonical.get("pass_loss_weights")
+    if "ntp_pass_loss_weights_by_k" not in canonical:
+        canonical["ntp_pass_loss_weights_by_k"] = canonical.get("pass_loss_weights_by_k")
+    canonical.setdefault("recurrent_nmp_target_normalization", "rms")
+    canonical.setdefault("recurrent_nmp_pass_loss_weights_by_k", None)
+    canonical.setdefault("tape_nmp_pass_loss_weights_by_k", None)
+    canonical.pop("pass_loss_weights", None)
+    canonical.pop("pass_loss_weights_by_k", None)
     ignored = {
         "model_dir",
         "data_dir",
@@ -307,11 +320,11 @@ def _resume_config_view(config: dict[str, Any]) -> dict[str, Any]:
         "checkpoint_keep_last",
         "snapshot_at_tokens",
     }
-    schedule = config.get("lr_schedule")
+    schedule = canonical.get("lr_schedule")
     schedule_type = "cosine" if schedule is None else str(schedule.get("type", "cosine"))
     if schedule_type == "constant":
         ignored.add("max_unique_tokens")
-    return {key: value for key, value in config.items() if key not in ignored}
+    return {key: value for key, value in canonical.items() if key not in ignored}
 
 
 def _source_identity(source: dict[str, Any] | None) -> tuple[Any, Any]:

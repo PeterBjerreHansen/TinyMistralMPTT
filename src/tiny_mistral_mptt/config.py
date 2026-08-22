@@ -43,9 +43,11 @@ def _coerce_pass_probabilities(raw: Any) -> dict[int, float]:
     return {passes: probability / total for passes, probability in sorted(result.items())}
 
 
-def _coerce_pass_loss_weights_by_k(raw: Any) -> dict[int, list[float]]:
+def _coerce_pass_loss_weights_by_k(
+    raw: Any, *, field_name: str = "pass_loss_weights_by_k"
+) -> dict[int, list[float]]:
     if not isinstance(raw, dict) or not raw:
-        raise ValueError("pass_loss_weights_by_k must be a non-empty mapping")
+        raise ValueError(f"{field_name} must be a non-empty mapping")
     result: dict[int, list[float]] = {}
     for key, values in raw.items():
         try:
@@ -55,12 +57,12 @@ def _coerce_pass_loss_weights_by_k(raw: Any) -> dict[int, list[float]]:
         if passes < 1:
             raise ValueError("pass-loss weight K values must be positive")
         if not isinstance(values, (list, tuple)) or not values:
-            raise ValueError(f"pass_loss_weights_by_k[{passes}] must be a non-empty list")
+            raise ValueError(f"{field_name}[{passes}] must be a non-empty list")
         weights = [float(value) for value in values]
         if any(not math.isfinite(value) or value < 0 for value in weights):
             raise ValueError("pass-loss weights must be finite and non-negative")
         if sum(weights) <= 0:
-            raise ValueError(f"pass_loss_weights_by_k[{passes}] must contain positive mass")
+            raise ValueError(f"{field_name}[{passes}] must contain positive mass")
         result[passes] = weights
     return dict(sorted(result.items()))
 
@@ -193,9 +195,14 @@ class ExperimentConfig:
     checkpoint_keep_last: int = 2
     snapshot_at_tokens: list[int] | None = None
 
-    # Architecture/training protocol knobs.
+    # Architecture/training protocol knobs. NTP names are explicit because
+    # recurrent and Tape NMP have independent pass-loss weightings below.
     phase: str = "B"
     pass_schedule: list[dict[str, Any]] | None = None
+    ntp_pass_loss_weights: list[float] | None = None
+    ntp_pass_loss_weights_by_k: dict[int, list[float]] | None = None
+    # Deprecated aliases accepted for old configs and checkpoints. They are
+    # canonicalized to the explicit NTP fields and omitted from to_dict().
     pass_loss_weights: list[float] | None = None
     pass_loss_weights_by_k: dict[int, list[float]] | None = None
     memory_window: int = 32
@@ -221,6 +228,8 @@ class ExperimentConfig:
     # as a raw-state ablation. Tape targets are always the post-writer memory
     # representation and are intentionally not normalized here.
     recurrent_nmp_target_normalization: str = "rms"
+    recurrent_nmp_pass_loss_weights_by_k: dict[int, list[float]] | None = None
+    tape_nmp_pass_loss_weights_by_k: dict[int, list[float]] | None = None
     nmp_projection_factor: float = 1.3
     nmp_warmup_tokens: int = 0
 
@@ -230,10 +239,35 @@ class ExperimentConfig:
     init_from: str | None = None
 
     def __post_init__(self) -> None:
-        if self.pass_loss_weights_by_k is not None:
-            self.pass_loss_weights_by_k = _coerce_pass_loss_weights_by_k(
-                self.pass_loss_weights_by_k
+        if self.ntp_pass_loss_weights is not None and self.pass_loss_weights is not None:
+            raise ValueError(
+                "ntp_pass_loss_weights and legacy pass_loss_weights are mutually exclusive"
             )
+        if (
+            self.ntp_pass_loss_weights_by_k is not None
+            and self.pass_loss_weights_by_k is not None
+        ):
+            raise ValueError(
+                "ntp_pass_loss_weights_by_k and legacy pass_loss_weights_by_k are mutually exclusive"
+            )
+        if self.ntp_pass_loss_weights is None:
+            self.ntp_pass_loss_weights = self.pass_loss_weights
+        if self.ntp_pass_loss_weights_by_k is None:
+            self.ntp_pass_loss_weights_by_k = self.pass_loss_weights_by_k
+        for field_name in (
+            "ntp_pass_loss_weights_by_k",
+            "recurrent_nmp_pass_loss_weights_by_k",
+            "tape_nmp_pass_loss_weights_by_k",
+        ):
+            value = getattr(self, field_name)
+            if value is not None:
+                setattr(
+                    self,
+                    field_name,
+                    _coerce_pass_loss_weights_by_k(value, field_name=field_name),
+                )
+        if self.pass_loss_weights_by_k is not None:
+            self.pass_loss_weights_by_k = self.ntp_pass_loss_weights_by_k
         if self.snapshot_at_tokens is not None:
             self.snapshot_at_tokens = sorted({int(value) for value in self.snapshot_at_tokens})
         if self.variant in {"tape", "tape_add_hybrid", "tape_recirculation_hybrid"}:
@@ -254,17 +288,53 @@ class ExperimentConfig:
     def added_lr(self) -> float:
         return self.learning_rate if self.added_learning_rate is None else float(self.added_learning_rate)
 
-    def loss_weights_for_passes(self, passes: int) -> list[float] | None:
+    def ntp_loss_weights_for_passes(self, passes: int) -> list[float] | None:
         if passes < 1:
             raise ValueError("passes must be positive")
-        if self.pass_loss_weights_by_k is not None:
+        if self.ntp_pass_loss_weights_by_k is not None:
             try:
-                return self.pass_loss_weights_by_k[passes]
+                return self.ntp_pass_loss_weights_by_k[passes]
             except KeyError as exc:
                 raise ValueError(
-                    f"no pass-loss weights configured for sampled K={passes}"
+                    f"no NTP pass-loss weights configured for sampled K={passes}"
                 ) from exc
-        return self.pass_loss_weights
+        return self.ntp_pass_loss_weights
+
+    # Compatibility method retained for callers using the old generic name.
+    def loss_weights_for_passes(self, passes: int) -> list[float] | None:
+        return self.ntp_loss_weights_for_passes(passes)
+
+    @staticmethod
+    def _nmp_loss_weights_for_passes(
+        mapping: dict[int, list[float]] | None,
+        passes: int,
+        *,
+        label: str,
+    ) -> list[float] | None:
+        if passes < 1:
+            raise ValueError("passes must be positive")
+        if mapping is None:
+            # MultiPassVariant normalizes None to uniform weights. Keeping the
+            # default implicit avoids duplicating every K in every config.
+            return None
+        try:
+            return mapping[passes]
+        except KeyError as exc:
+            raise ValueError(f"no {label} pass-loss weights configured for sampled K={passes}") from exc
+
+    def recurrent_nmp_loss_weights_for_passes(self, passes: int) -> list[float] | None:
+        return self._nmp_loss_weights_for_passes(
+            self.recurrent_nmp_pass_loss_weights_by_k,
+            passes,
+            label="recurrent NMP",
+        )
+
+    def tape_nmp_loss_weights_for_passes(self, passes: int) -> list[float] | None:
+        return self._nmp_loss_weights_for_passes(
+            self.tape_nmp_pass_loss_weights_by_k,
+            passes,
+            label="Tape NMP",
+        )
 
     def nmp_weight_scale_at(self, unique_tokens_seen: int) -> float:
         if unique_tokens_seen < 0:
@@ -466,25 +536,47 @@ class ExperimentConfig:
             raise ValueError("vanilla has no Phase-A parameters")
         if self.phase == "A" and any(passes < 2 for passes in pass_counts):
             raise ValueError("Phase A for multipass variants requires at least two passes on every batch")
-        if self.pass_loss_weights is not None and self.pass_loss_weights_by_k is not None:
+        if self.ntp_pass_loss_weights is not None and self.ntp_pass_loss_weights_by_k is not None:
             raise ValueError(
-                "pass_loss_weights and pass_loss_weights_by_k are mutually exclusive"
+                "ntp_pass_loss_weights and ntp_pass_loss_weights_by_k are mutually exclusive"
             )
-        if self.pass_loss_weights is not None:
-            if not self.pass_loss_weights:
-                raise ValueError("pass_loss_weights must not be empty")
-            weights = [float(value) for value in self.pass_loss_weights]
+        if self.ntp_pass_loss_weights is not None:
+            if not self.ntp_pass_loss_weights:
+                raise ValueError("ntp_pass_loss_weights must not be empty")
+            weights = [float(value) for value in self.ntp_pass_loss_weights]
             if any(not math.isfinite(value) or value < 0 for value in weights):
-                raise ValueError("pass_loss_weights must be finite and non-negative")
+                raise ValueError("ntp_pass_loss_weights must be finite and non-negative")
             if sum(weights) <= 0:
-                raise ValueError("pass_loss_weights must contain positive mass")
-        if self.pass_loss_weights_by_k is not None:
-            configured = set(self.pass_loss_weights_by_k)
+                raise ValueError("ntp_pass_loss_weights must contain positive mass")
+        if self.ntp_pass_loss_weights_by_k is not None:
+            configured = set(self.ntp_pass_loss_weights_by_k)
             if configured != pass_counts:
                 raise ValueError(
-                    "pass_loss_weights_by_k keys must exactly match sampled pass counts "
+                    "ntp_pass_loss_weights_by_k keys must exactly match sampled pass counts "
                     f"{sorted(pass_counts)}; got {sorted(configured)}"
                 )
+            for passes, weights in self.ntp_pass_loss_weights_by_k.items():
+                if len(weights) != passes:
+                    raise ValueError(
+                        f"ntp_pass_loss_weights_by_k[{passes}] must contain exactly {passes} weights"
+                    )
+        for name, mapping in (
+            ("recurrent_nmp_pass_loss_weights_by_k", self.recurrent_nmp_pass_loss_weights_by_k),
+            ("tape_nmp_pass_loss_weights_by_k", self.tape_nmp_pass_loss_weights_by_k),
+        ):
+            if mapping is None:
+                continue
+            configured = set(mapping)
+            if configured != pass_counts:
+                raise ValueError(
+                    f"{name} keys must exactly match sampled pass counts "
+                    f"{sorted(pass_counts)}; got {sorted(configured)}"
+                )
+            for passes, weights in mapping.items():
+                if len(weights) != passes:
+                    raise ValueError(
+                        f"{name}[{passes}] must contain exactly {passes} weights"
+                    )
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "ExperimentConfig":
@@ -497,7 +589,10 @@ class ExperimentConfig:
         return cfg
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        result = asdict(self)
+        result.pop("pass_loss_weights", None)
+        result.pop("pass_loss_weights_by_k", None)
+        return result
 
 
 def load_experiment_config(path: str | Path) -> ExperimentConfig:

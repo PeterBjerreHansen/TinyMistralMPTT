@@ -12,7 +12,7 @@ memory_layers: [4, 7]
 memory_position_encoding: rope
 model_dir: checkpoints/TinyMistral-248M-v3
 data_dir: data/dolmino/pilot_2048
-output_dir: benchmarks/ad_hoc/results/generated/recirculation_tape_nmp/diagnostic_high
+output_dir: benchmarks/ad_hoc/recirculation_tape_nmp/stage_2_nmp_diagnostics/results/generated/diagnostic_default
 device: mps
 dtype: float32
 autocast_dtype: null
@@ -30,10 +30,14 @@ weight_decay: 0.01
 grad_clip: 1.0
 pass_schedule:
   - probabilities: {2: 1.0}
-pass_loss_weights_by_k:
+ntp_pass_loss_weights_by_k:
   2: [0.1, 0.9]
-recurrent_nmp_weight: 0.02
-tape_nmp_weight: 0.20
+recurrent_nmp_pass_loss_weights_by_k:
+  2: [0.5, 0.5]
+tape_nmp_pass_loss_weights_by_k:
+  2: [0.5, 0.5]
+recurrent_nmp_weight: 0.01
+tape_nmp_weight: 0.10
 nmp_projection_factor: 1.3
 nmp_warmup_tokens: 1
 eval_every_tokens: 0
@@ -44,4 +48,4 @@ checkpoint_every_seconds: 0.0
 checkpoint_keep_last: 1
 snapshot_at_tokens: null
 resume_from: null
-init_from: benchmarks/ad_hoc/results/generated/recirculation_tape_nmp/hybrid_ntp_10m/checkpoints/checkpoint_000010485760.pt
+init_from: benchmarks/ad_hoc/recirculation_tape_nmp/stage_1_ntp_continuation/results/generated/hybrid_ntp_10m/checkpoints/checkpoint_000010485760.pt

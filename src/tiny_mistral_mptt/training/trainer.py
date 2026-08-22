@@ -601,7 +601,13 @@ class Trainer:
                         ids,
                         phase=cfg.phase,
                         passes=passes,
-                        loss_weights=cfg.loss_weights_for_passes(passes),
+                        loss_weights=cfg.ntp_loss_weights_for_passes(passes),
+                        recurrent_nmp_loss_weights=cfg.recurrent_nmp_loss_weights_for_passes(
+                            passes
+                        ),
+                        tape_nmp_loss_weights=cfg.tape_nmp_loss_weights_for_passes(
+                            passes
+                        ),
                         nmp_weight_scale=cfg.nmp_weight_scale_at(
                             self.state.unique_tokens_seen
                         ),

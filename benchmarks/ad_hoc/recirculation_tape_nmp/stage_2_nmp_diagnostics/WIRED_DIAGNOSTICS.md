@@ -24,6 +24,11 @@ diagnostic scale. Re-run the diagnostics after the 10M NTP parent exists; the
 recurrent target RMS should then be close to one and the auxiliary coefficient
 comparison should be made using the new metrics:
 
+Each report also records target feature standard deviation, per-pass prediction
+error RMS, the fraction of Smooth-L1 elements in the linear region, and valid
+query/event counts. Use these fields when interpreting a large raw tape target
+or a batch whose sparse policy emits no future write.
+
 | Diagnostic setting | Recurrent weight | Tape weight | Weighted NMP / NTP |
 | --- | ---: | ---: | ---: |
 | low | 0.005 | 0.05 | 5.18% |

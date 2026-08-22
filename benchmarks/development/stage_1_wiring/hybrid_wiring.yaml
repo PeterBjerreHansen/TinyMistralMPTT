@@ -26,7 +26,7 @@ weight_decay: 0.01
 grad_clip: 1.0
 pass_schedule:
   - probabilities: {2: 0.9, 3: 0.1}
-pass_loss_weights_by_k:
+ntp_pass_loss_weights_by_k:
   2: [0.0, 1.0]
   3: [0.0, 0.0, 1.0]
 eval_every_tokens: 524288

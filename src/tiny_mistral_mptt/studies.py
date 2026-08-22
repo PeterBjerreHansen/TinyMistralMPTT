@@ -21,6 +21,10 @@ from .config import ExperimentConfig, load_experiment_config
 _ARM_ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _ALLOWED_STATUS = {"planned", "active", "complete", "locked"}
 _ALWAYS_LOCAL_FIELDS = {"output_dir"}
+_CONFIG_FIELD_ALIASES = {
+    "pass_loss_weights": "ntp_pass_loss_weights",
+    "pass_loss_weights_by_k": "ntp_pass_loss_weights_by_k",
+}
 
 
 class StudyValidationError(ValueError):
@@ -80,7 +84,13 @@ def _comparison_view(
     experimental_axes: set[str],
     allowed_differences: set[str],
 ) -> dict[str, Any]:
-    declared = experimental_axes | allowed_differences
+    # Study manifests written before the explicit NTP/NMP naming split may
+    # still declare the generic pass-loss names. Compare against the canonical
+    # serialized config while retaining compatibility with those manifests.
+    declared = {
+        _CONFIG_FIELD_ALIASES.get(field, field)
+        for field in experimental_axes | allowed_differences
+    }
     unknown = declared - set(config.__dataclass_fields__)
     if unknown:
         raise StudyValidationError(

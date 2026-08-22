@@ -2,7 +2,8 @@
 
 This ad-hoc program has three stages. It uses only the periodic-C32
 Recirculation–Tape hybrid; dense and MemoryAdd variants are intentionally out of
-scope for this pass.
+scope for this pass. Each stage owns its execution code and its own
+`results/generated/` directory; there is no shared results directory.
 
 ## Stage 1: 10M NTP continuation
 
@@ -10,11 +11,11 @@ Run the hybrid and vanilla configs on the document-disjoint pilot artifact:
 
 ```bash
 uv run python scripts/train.py \
-  --config benchmarks/ad_hoc/recirculation_tape_nmp/hybrid_ntp_10m.yaml \
+  --config benchmarks/ad_hoc/recirculation_tape_nmp/stage_1_ntp_continuation/hybrid_ntp_10m.yaml \
   --resume-auto
 
 uv run python scripts/train.py \
-  --config benchmarks/ad_hoc/recirculation_tape_nmp/vanilla_ntp_10m.yaml \
+  --config benchmarks/ad_hoc/recirculation_tape_nmp/stage_1_ntp_continuation/vanilla_ntp_10m.yaml \
   --resume-auto
 ```
 
@@ -33,8 +34,8 @@ the 10M hybrid checkpoint after Stage 1:
 
 ```bash
 for scale in low default high; do
-  uv run python benchmarks/ad_hoc/recirculation_tape_nmp/diagnose_nmp.py \
-    --config benchmarks/ad_hoc/recirculation_tape_nmp/diagnostic_${scale}.yaml \
+  uv run python benchmarks/ad_hoc/recirculation_tape_nmp/stage_2_nmp_diagnostics/diagnose_nmp.py \
+    --config benchmarks/ad_hoc/recirculation_tape_nmp/stage_2_nmp_diagnostics/diagnostic_${scale}.yaml \
     --checkpoint benchmarks/development/stage_2_local_smoke/results/generated/\
 hybrid_recirculation_smoke/checkpoints/checkpoint_000001048576.pt
 done
@@ -54,18 +55,21 @@ magnitude after accounting for target RMS and the configured coefficients.
 
 ## Stage 3: serious auxiliary runs
 
-Once the diagnostic JSON is reviewed, run the three 2M-token continuations:
+Once the diagnostic JSON is reviewed, run the NTP-only control and the three
+2M-token auxiliary continuations:
 
 ```bash
-for objective in recurrent tape dual; do
+for objective in ntp recurrent tape dual; do
   uv run python scripts/train.py \
-    --config benchmarks/ad_hoc/recirculation_tape_nmp/serious_${objective}_2m.yaml \
+    --config benchmarks/ad_hoc/recirculation_tape_nmp/stage_3_nmp_training/serious_${objective}_2m.yaml \
     --resume-auto
 done
 ```
 
-These runs start from the 10M NTP hybrid checkpoint, keep NTP active, and use
-the default scale-aware coefficients: recurrent `0.01`, tape `0.10`, or both.
+The NTP control has both NMP coefficients set to zero and uses the exact same
+starting checkpoint, data, pass schedule, and token budget as the auxiliary
+runs. The other runs keep NTP active and use the default scale-aware
+coefficients: recurrent `0.01`, tape `0.10`, or both.
 The 2M continuation reuses the pilot training artifact because no separate
 100M local artifact is materialized. Validation remains the pilot validation
 split, which is separate from its training split. Treat these as continuation

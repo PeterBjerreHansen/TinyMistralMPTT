@@ -64,6 +64,37 @@ def test_yaml_style_string_k_keys_are_canonicalized():
     }
 
 
+def test_objective_specific_pass_weights_are_canonical_and_uniform_defaults_are_explicitly_overridable():
+    cfg = _config(
+        ntp_pass_loss_weights_by_k={2: [0.25, 0.75], 3: [0.1, 0.2, 0.7]},
+        recurrent_nmp_pass_loss_weights_by_k={2: [0.5, 0.5], 3: [1.0, 1.0, 1.0]},
+        tape_nmp_pass_loss_weights_by_k={2: [0.8, 0.2], 3: [0.2, 0.3, 0.5]},
+    )
+
+    assert cfg.ntp_loss_weights_for_passes(2) == [0.25, 0.75]
+    assert cfg.recurrent_nmp_loss_weights_for_passes(3) == [1.0, 1.0, 1.0]
+    assert cfg.tape_nmp_loss_weights_for_passes(2) == [0.8, 0.2]
+    serialized = cfg.to_dict()
+    assert serialized["ntp_pass_loss_weights_by_k"] == {
+        2: [0.25, 0.75],
+        3: [0.1, 0.2, 0.7],
+    }
+    assert "pass_loss_weights" not in serialized
+    assert "pass_loss_weights_by_k" not in serialized
+
+
+def test_nmp_pass_weight_maps_require_exact_schedule_coverage_and_lengths():
+    with pytest.raises(ValueError, match="recurrent_nmp_pass_loss_weights_by_k.*exactly match"):
+        _config(recurrent_nmp_pass_loss_weights_by_k={2: [0.5, 0.5]})
+    with pytest.raises(ValueError, match=r"tape_nmp_pass_loss_weights_by_k\[3\].*exactly 3"):
+        _config(
+            tape_nmp_pass_loss_weights_by_k={
+                2: [0.5, 0.5],
+                3: [0.5, 0.5],
+            }
+        )
+
+
 def test_bfloat16_autocast_requires_fp32_parameter_storage():
     cfg = _config(dtype="float32", autocast_dtype="bfloat16")
     assert cfg.autocast_dtype == "bfloat16"

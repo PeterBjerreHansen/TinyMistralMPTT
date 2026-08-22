@@ -52,10 +52,20 @@ write events are then averaged within each example, and valid examples are
 averaged last. This prevents longer spacing from increasing an event's loss
 mass merely because it has more guesses.
 
-Both objectives use Smooth-L1 over latent dimensions. All computed passes
-contribute uniformly to NMP, independently of NTP pass weights. This lets early
-passes distill the same final-pass target even when their NTP loss weight is
-zero. Per-pass metrics expose the individual losses.
+Both objectives use Smooth-L1 over latent dimensions. NMP pass weights are
+independent of NTP pass weights and are uniform when no objective-specific map
+is configured. Configure them by sampled pass count when needed:
+
+```yaml
+recurrent_nmp_pass_loss_weights_by_k:
+  2: [0.5, 0.5]
+tape_nmp_pass_loss_weights_by_k:
+  2: [0.5, 0.5]
+```
+
+Every pass still predicts the same detached final-pass target; weighting only
+changes how the pass-specific prediction losses are combined. Per-pass metrics
+expose the individual losses and weights.
 
 ## Configuration
 
@@ -120,6 +130,8 @@ The test suite asserts that:
 - all passes use one shared detached final-pass target;
 - Recirculation uses its internal captured source, not the top hidden state;
 - Tape targets the post-writer representation;
+- sparse batches with no future write produce a zero auxiliary loss and remain
+  numerically valid;
 - target tensors receive no gradient, while predictor inputs and the causal
   writer-to-reader path do;
 - enabled heads do not change ordinary forward logits.

@@ -2,7 +2,7 @@ variant: vanilla
 phase: B
 model_dir: checkpoints/TinyMistral-248M-v3
 data_dir: data/dolmino/pilot_2048
-output_dir: benchmarks/ad_hoc/results/generated/recirculation_tape_nmp/vanilla_ntp_10m
+output_dir: benchmarks/ad_hoc/recirculation_tape_nmp/stage_1_ntp_continuation/results/generated/vanilla_ntp_10m
 device: mps
 dtype: float32
 autocast_dtype: null
@@ -20,7 +20,7 @@ weight_decay: 0.01
 grad_clip: 1.0
 pass_schedule:
   - probabilities: {1: 1.0}
-pass_loss_weights: null
+ntp_pass_loss_weights: null
 eval_every_tokens: 1048576
 eval_passes: 1
 eval_batches: 64

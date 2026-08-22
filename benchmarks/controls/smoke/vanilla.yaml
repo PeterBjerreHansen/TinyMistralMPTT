@@ -24,7 +24,7 @@ grad_clip: 1.0
 pass_schedule:
   - probabilities:
       1: 1.0
-pass_loss_weights: null
+ntp_pass_loss_weights: null
 eval_every_tokens: 1024
 eval_passes: 1
 eval_batches: 2

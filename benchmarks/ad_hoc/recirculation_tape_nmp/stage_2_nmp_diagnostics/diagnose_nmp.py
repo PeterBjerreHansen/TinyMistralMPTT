@@ -19,7 +19,10 @@ from tiny_mistral_mptt.training.checkpoint import load_model_weights
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+    for parent in Path(__file__).resolve().parents:
+        if (parent / ".git").exists():
+            return parent
+    raise RuntimeError("could not locate repository root from diagnostic script")
 
 
 def _resolve_repo_path(path: str | Path) -> Path:
@@ -91,7 +94,13 @@ def main() -> None:
                 ids,
                 phase=cfg.phase,
                 passes=args.passes,
-                loss_weights=cfg.loss_weights_for_passes(args.passes),
+                loss_weights=cfg.ntp_loss_weights_for_passes(args.passes),
+                recurrent_nmp_loss_weights=cfg.recurrent_nmp_loss_weights_for_passes(
+                    args.passes
+                ),
+                tape_nmp_loss_weights=cfg.tape_nmp_loss_weights_for_passes(
+                    args.passes
+                ),
                 nmp_weight_scale=1.0,
             )
             records.append(dict(output.metrics))
