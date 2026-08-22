@@ -36,5 +36,6 @@ benchmarks/**/results/generated/
 
 # Historical benchmark artifacts are local review material, not branch source.
 benchmarks/historical/
+benchmarks/ad_hoc/
 
 .coverage

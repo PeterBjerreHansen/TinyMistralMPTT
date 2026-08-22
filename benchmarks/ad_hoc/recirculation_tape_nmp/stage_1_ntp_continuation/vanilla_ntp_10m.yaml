@@ -2,7 +2,7 @@ variant: vanilla
 phase: B
 model_dir: checkpoints/TinyMistral-248M-v3
 data_dir: data/dolmino/pilot_2048
-output_dir: benchmarks/ad_hoc/recirculation_tape_nmp/stage_1_ntp_continuation/results/generated/vanilla_ntp_10m
+output_dir: benchmarks/ad_hoc/recirculation_tape_nmp/stage_1_ntp_continuation/results/generated/vanilla_ntp_10m_constant_lr
 device: mps
 dtype: float32
 autocast_dtype: null
@@ -15,7 +15,7 @@ max_unique_tokens: 10485760
 learning_rate: 1.0e-6
 pretrained_learning_rate: 1.0e-6
 added_learning_rate: null
-lr_schedule: {type: cosine, warmup_tokens: 131072, min_multiplier: 0.1}
+lr_schedule: {type: constant}
 weight_decay: 0.01
 grad_clip: 1.0
 pass_schedule:

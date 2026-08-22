@@ -11,12 +11,9 @@ Run the hybrid and vanilla configs on the document-disjoint pilot artifact:
 
 ```bash
 uv run python scripts/train.py \
-  --config benchmarks/ad_hoc/recirculation_tape_nmp/stage_1_ntp_continuation/hybrid_ntp_10m.yaml \
-  --resume-auto
-
+  --config benchmarks/ad_hoc/recirculation_tape_nmp/stage_1_ntp_continuation/hybrid_ntp_10m.yaml && \
 uv run python scripts/train.py \
-  --config benchmarks/ad_hoc/recirculation_tape_nmp/stage_1_ntp_continuation/vanilla_ntp_10m.yaml \
-  --resume-auto
+  --config benchmarks/ad_hoc/recirculation_tape_nmp/stage_1_ntp_continuation/vanilla_ntp_10m.yaml
 ```
 
 The hybrid starts from the completed Stage-2 wired checkpoint. Vanilla starts
@@ -56,24 +53,24 @@ magnitude after accounting for target RMS and the configured coefficients.
 ## Stage 3: serious auxiliary runs
 
 Once the diagnostic JSON is reviewed, run the NTP-only control and the three
-2M-token auxiliary continuations:
+5M-token auxiliary continuations:
 
 ```bash
 for objective in ntp recurrent tape dual; do
   uv run python scripts/train.py \
-    --config benchmarks/ad_hoc/recirculation_tape_nmp/stage_3_nmp_training/serious_${objective}_2m.yaml \
+    --config benchmarks/ad_hoc/recirculation_tape_nmp/stage_3_nmp_training/serious_${objective}_5m.yaml \
     --resume-auto
 done
 ```
 
 The NTP control has both NMP coefficients set to zero and uses the exact same
 starting checkpoint, data, pass schedule, and token budget as the auxiliary
-runs. The other runs keep NTP active and use the default scale-aware
-coefficients: recurrent `0.01`, tape `0.10`, or both.
-The 2M continuation reuses the pilot training artifact because no separate
-100M local artifact is materialized. Validation remains the pilot validation
-split, which is separate from its training split. Treat these as continuation
-experiments, not fresh-data generalization estimates.
+runs. The recurrent and tape arms use the calibrated 20% coefficients
+(`14.412281` and `3.404028`); the dual arm uses half of each. The 5M
+continuation consumes the prepared `nmp_sweep_2048` artifact once. Validation
+remains the canonical held-out split, which is separate from its training
+split. Treat these as continuation experiments, not fresh-data generalization
+estimates.
 
 The intended comparison is whether sparse tape NMP improves long-horizon
 prediction without harming NTP, and whether adding recurrent NMP provides an

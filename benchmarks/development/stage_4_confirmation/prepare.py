@@ -17,7 +17,6 @@ PILOT_CONFIGS = {
     "tape_dense": "tape_dense_seed1337.yaml",
     "tape_periodic32": "tape_periodic32_seed1337.yaml",
     "tape_memory_token32": "tape_memory_token32_seed1337.yaml",
-    "hybrid": "hybrid_seed1337.yaml",
     "hybrid_recirculation": "hybrid_recirculation_seed1337.yaml",
 }
 
@@ -36,8 +35,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--hybrid",
-        choices=("memory_add", "recirculation"),
-        default="memory_add",
+        choices=("recirculation",),
+        default="recirculation",
     )
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
@@ -45,7 +44,7 @@ def main() -> None:
     stage_dir = Path(__file__).resolve().parent
     root = stage_dir.parents[2]
     pilot_dir = root / "benchmarks" / "development" / "stage_3_cloud_pilot"
-    hybrid = "hybrid" if args.hybrid == "memory_add" else "hybrid_recirculation"
+    hybrid = "hybrid_recirculation"
     selected = ("vanilla", args.fast, f"tape_{args.tape}", hybrid)
     generated: list[tuple[str, str]] = []
 

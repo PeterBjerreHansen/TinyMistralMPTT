@@ -48,4 +48,4 @@ checkpoint_every_seconds: 0.0
 checkpoint_keep_last: 1
 snapshot_at_tokens: null
 resume_from: null
-init_from: benchmarks/ad_hoc/recirculation_tape_nmp/stage_1_ntp_continuation/results/generated/hybrid_ntp_10m/checkpoints/checkpoint_000010485760.pt
+init_from: benchmarks/ad_hoc/recirculation_tape_nmp/stage_1_ntp_continuation/results/generated/hybrid_ntp_10m_constant_lr/checkpoints/checkpoint_000010485760.pt

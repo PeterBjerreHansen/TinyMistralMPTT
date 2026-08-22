@@ -6,11 +6,11 @@ First resume each promoted Stage-3 seed to its declared 10M endpoint:
 uv run python scripts/run_study.py \
   --study-dir benchmarks/development/stage_3_cloud_pilot \
   --skip-wire --arm vanilla_seed1337 --arm tape_periodic32_seed1337 \
-  --arm hybrid_seed1337 --arm memory_add_seed1337
+  --arm memory_add_seed1337
 ```
 
-The command shows periodic Tape, MemoryAdd recurrence, and the MemoryAdd hybrid
-as an example; replace all selected arm IDs with the Stage-3 gate decisions.
+The command shows periodic Tape and MemoryAdd recurrence as examples; replace
+the selected arm IDs with the Stage-3 gate decisions.
 
 Then materialize the two additional-seed study. Choose the fast baseline and
 hybrid using the Stage-3 gate:
@@ -25,7 +25,7 @@ uv run python scripts/run_study.py \
 ```
 
 `--fast` accepts `memory_add` or `recirculation_adaptive`; `--tape` accepts
-`dense`, `periodic32`, or `memory_token32`; `--hybrid` accepts `memory_add` or
-`recirculation` and defaults to `memory_add`. Preparation fails rather than
+`dense`, `periodic32`, or `memory_token32`; `--hybrid` accepts `recirculation`
+and defaults to `recirculation`. Preparation fails rather than
 overwriting an existing selection; pass `--force` only when deliberately
 replacing a study that has not begun execution.

@@ -94,8 +94,8 @@ class Trainer:
         stop_requested: Callable[[], bool] | None = None,
     ):
         config.validate()
-        if resume_auto and (config.resume_from or config.init_from):
-            raise ValueError("resume_auto is mutually exclusive with resume_from/init_from")
+        if resume_auto and config.resume_from:
+            raise ValueError("resume_auto is mutually exclusive with resume_from")
         if train_data.manifest != validation_data.manifest:
             raise ValueError("train and validation datasets must come from the same artifact")
         if train_data.sequence_length != validation_data.sequence_length:
